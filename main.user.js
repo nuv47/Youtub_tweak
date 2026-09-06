@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.5
+// @version     1.1.5.6
 // @updateURL   https://raw.githubusercontent.com/nuv47/cfg-00e17630ada1/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/cfg-00e17630ada1/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -22,6 +22,12 @@
 // @grant       GM_getValue
 // @grant       GM_addElement
 // ==/UserScript==
+// CUSTOM[MERGE-GUIDE] 원본 병합 때 CUSTOM[ 를 검색해 개조 동작과 호출부를 함께 유지한다.
+// CUSTOM[MERGE-GUIDE] 비교 기준은 Greasy Fork 560618 원본 v1.1.5이며, 최신 원본 전체로 덮어쓰지 않는다.
+// CUSTOM[MERGE-GUIDE] 원본: https://greasyfork.org/scripts/560618
+// CUSTOM[METADATA] 위의 youtub 이름, en/ko 설명, 별도 namespace, 자체 GitHub 업데이트 주소를 유지한다.
+// CUSTOM[METADATA] www.youtube.com HTTPS 범위와 현재 필요한 GM 권한만 유지하고 배포 시 자체 버전을 올린다.
+// CUSTOM[MERGE-GUIDE] 삭제한 불필요한 권한, 상시 타이머, 전역 Trusted Types 우회도 원본에서 되살리지 않는다.
 (function () {
   'use strict';
 
@@ -102,7 +108,9 @@
     const DEBUG_5084 = false;
     const DEBUG_5085 = false;
     const DEBUG_handleNavigateFactory = false;
+    // CUSTOM[COMMENTS] 첫 진입·영상 변경의 기본은 댓글. pending 상태와 수동 선택 보호도 함께 유지한다.
     const TAB_AUTO_SWITCH_TO_COMMENTS = true;
+    // CUSTOM[TRUSTED-HTML] 페이지 전체의 default 정책 대신 레이아웃의 HTML 전용 정책을 사용한다.
     let trustedHtmlPolicy = null;
     if (typeof trustedTypes !== "undefined" && trustedTypes.createPolicy) {
       try {
@@ -123,6 +131,7 @@
       trustHTMLErr = e;
     }
     if (trustHTMLErr) {
+      // CUSTOM[TRUSTED-HTML] Trusted HTML을 사용할 수 없으면 레이아웃 초기화만 중단한다. 오류 객체를 호출하지 않는다.
       console.warn("[YouTube Improvements] Comment layout disabled because Trusted HTML is unavailable.", trustHTMLErr);
       return;
     }
@@ -1010,6 +1019,7 @@
           if (commentsArea.closest("#tab-comments")) {
             const shouldTabVisible = !commentsArea.closest("[hidden]");
             document.querySelector('[tyt-tab-content="#tab-comments"]').classList.toggle("tab-btn-hidden", !shouldTabVisible);
+            // CUSTOM[COMMENTS] 댓글이 늦게 나타나도 기본 선택이 대기 중일 때만 전환한다.
             switchToDefaultCommentsTab();
           }
         }
@@ -1077,6 +1087,7 @@
         if (switchingTo) {
           lastTab = lastPanel = switchingTo;
         }
+        // CUSTOM[COMMENTS] 댓글 선택에 성공하면 대기를 끝내 반복 자동 전환을 막는다.
         if (switchingTo === "#tab-comments")
           defaultCommentsPending = false;
         if (ytdFlexyElm.getAttribute000("tyt-chat") === "")
@@ -1387,6 +1398,7 @@
       };
       let lastPanel = "";
       let lastTab = "";
+      // CUSTOM[COMMENTS] 한 번만 기본 선택하며 수동 선택·영화관 모드·열린 채팅/재생목록을 보호한다.
       let defaultCommentsPending = TAB_AUTO_SWITCH_TO_COMMENTS;
       const switchToDefaultCommentsTab = () => {
         if (!defaultCommentsPending || !elements.flexy || elements.flexy.hasAttribute("theater"))
@@ -2493,6 +2505,7 @@
             document.querySelector('[tyt-tab-content="#tab-comments"]').classList.toggle("tab-btn-hidden", !shouldTabVisible);
             Promise.resolve(lockSet["removeKeepCommentsScrollerLock"]).then(removeKeepCommentsScroller).catch(console.warn);
           }
+          // CUSTOM[COMMENTS] 댓글 연결 시 실제 숨김 상태를 반영한 뒤 기본 선택해 빈 패널을 방지한다.
           const shouldTabVisible = !hostElement.closest("[hidden]");
           document.querySelector('[tyt-tab-content="#tab-comments"]').classList.toggle("tab-btn-hidden", !shouldTabVisible);
           switchToDefaultCommentsTab();
@@ -3462,6 +3475,7 @@
           const videoId = tmpLastVideoId;
           if (!videoId)
             return;
+          // CUSTOM[COMMENTS] 새 영상에서는 기본 댓글 선택을 다시 활성화한다.
           defaultCommentsPending = TAB_AUTO_SWITCH_TO_COMMENTS;
           switchToDefaultCommentsTab();
           const bodyRenderer = elements.infoExpanderRendererBack;
@@ -3493,6 +3507,7 @@
             const hasTheater = qTab.hasAttribute("theater");
             if (!hasTheater) {
               DEBUG_5085 && void 0;
+              // CUSTOM[COMMENTS] 표시 감지 지연에 의존하지 않고 사용 가능한 댓글 → 추천 영상 → 다른 탭 순으로 선택한다.
               const btn0 = document.querySelector('a[tyt-tab-content="#tab-comments"]:not(.tab-btn-hidden)') || document.querySelector('a[tyt-tab-content="#tab-videos"]:not(.tab-btn-hidden)') || document.querySelector(".tab-btn:not(.tab-btn-hidden)");
               if (btn0) {
                 switchToTab(btn0);
@@ -3515,6 +3530,7 @@
             evt.stopPropagation();
             evt.stopImmediatePropagation();
             const activeLink = target;
+            // CUSTOM[COMMENTS] 사용자가 고른 탭을 나중에 로드된 댓글이 덮어쓰지 않도록 기본 선택을 취소한다.
             defaultCommentsPending = false;
             switchToTab(activeLink);
           }
@@ -3585,6 +3601,7 @@
           if (r) {
             moOverallRes._yt_playerProvided = r;
             eventMap._yt_playerProvided();
+            // CUSTOM[PERFORMANCE] 플레이어 탐지를 마친 전체 DOM 감시는 해제한다.
             moOverall.disconnect();
           }
         }
@@ -3634,6 +3651,7 @@
   };
 
   const commonUtil = {
+    // CUSTOM[PAGE-LOAD] 준비된 문서도 즉시 처리하고 DOMContentLoaded/load 이중 실행을 피한다.
     onPageLoad: function(callback) {
       if (document.readyState !== "loading") {
         callback();
@@ -3644,6 +3662,7 @@
     addStyle: function(style) {
       GM_addStyle(style);
     },
+    // CUSTOM[PERFORMANCE] 10ms 반복 조회 대신 DOM 감시를 사용하고 성공/시간 초과 시 감시·타이머를 정리한다.
     waitForElement: function(selector, target = document.body, allowEmpty = true, maxDelay = 10 * 1e3) {
       return new Promise((resolve) => {
         const root = target || document.documentElement;
@@ -3692,6 +3711,7 @@
         });
       }
       return new Promise((resolve) => {
+        // CUSTOM[SPEED] 실제 배속 기능 설정 키와 저장값을 검증하고 잘못된 배속은 1배속으로 복구한다.
         const functionState = StorageUtil.getValue(
           StorageUtil.keys.youtube.functionState,
           StorageUtil.getDefaultFunctionState()
@@ -3782,6 +3802,7 @@
       const speedText = document.createElement("span");
       speedText.textContent = "" + this.currentSpeed + "×";
       speedControlBtn.appendChild(speedText);
+      // CUSTOM[PERFORMANCE] 배속 UI도 제한 시간 있는 DOM 대기를 사용한다.
       const player = await commonUtil.waitForElement("#player-container-outer .html5-video-player");
       if (player) {
         const rightControls = player.querySelector(".ytp-right-controls");
@@ -3855,6 +3876,7 @@
       let element = document.getElementById(elementId);
       if (!element) {
         let mediaElement = document.getElementById("movie_player");
+        // CUSTOM[SPEED] 플레이어 부재를 처리하고 배속 표시는 HTML 문자열 대신 DOM/textContent로 만든다.
         if (!mediaElement) {
           return;
         }
@@ -3892,12 +3914,14 @@
       this.activeAnimationId = requestAnimationFrame(fadeStep);
     },
     setVideoRate: function(speed) {
+      // CUSTOM[SPEED] 양의 유한 배속만 주 플레이어에 적용한다.
       const playbackRate = Number(speed);
       const videoElement = document.querySelector("#movie_player video");
       if (!videoElement || !Number.isFinite(playbackRate) || playbackRate <= 0)
         return;
       videoElement.playbackRate = playbackRate;
     },
+    // CUSTOM[PERFORMANCE] 상시 조회와 src 속성 감시 대신 loadedmetadata로 새 영상에 배속을 적용한다.
     videoObserver: function() {
       const applyCurrentSpeed = (videoElement) => {
         if (videoElement instanceof HTMLVideoElement && videoElement.closest("#movie_player")) {
@@ -3914,6 +3938,7 @@
   const MarkOrRemoveAd = {
     generateRemoveAdElementId: "removeADHTMLElement_" + Math.ceil(Math.random() * 1e8),
     markADHTMLElement: function() {
+      // CUSTOM[AD-MARKER] 생성한 ID를 ID로 조회해 광고 표시 UI의 중복 생성을 막는다.
       if (document.getElementById(this.generateRemoveAdElementId)) {
         return;
       }
@@ -4072,6 +4097,7 @@
         this.mask.appendChild(this.content);
       }
       middleBox(param) {
+        // CUSTOM[TRUSTED-HTML] 비우기에는 HTML 대입 대신 DOM API를 사용한다.
         this.content.replaceChildren();
         if (param.hasOwnProperty("direction")) {
           this.content.setAttribute("data-extension-direction", param.direction);
@@ -4137,6 +4163,7 @@
           "max-height": "400px",
           "overflow": "auto"
         });
+        // CUSTOM[ADGUARD] 대화상자 HTML에는 AdGuard의 Trusted Types 정책을 적용한다.
         this.dialogContent.innerHTML = typeof ADG_policyApi !== "undefined" && ADG_policyApi.isSupported ? ADG_policyApi.createHTML(param.content) : param.content;
         this.content.appendChild(this.dialogContent);
         param.onContentReady(this);
@@ -4483,6 +4510,7 @@
       const showSettingDialog = () => {
         this.showSettingDialog();
       };
+      // CUSTOM[PIP] 주 플레이어와 Picture-in-Picture API 존재를 확인한 뒤 실행한다.
       const pictureToPicture = () => {
         const video = document.querySelector("#movie_player video");
         if (video && "pictureInPictureEnabled" in document && typeof video.requestPictureInPicture === "function") {
@@ -4493,6 +4521,7 @@
           }
         }
       };
+      // CUSTOM[PERFORMANCE] 반복 재생은 클릭/loadedmetadata로 반영하고 1초 상시 타이머를 사용하지 않는다.
       let videoLoopSate = StorageUtil.getValue(StorageUtil.keys.youtube.videoLoop, false);
       const videoLoopEvent = () => {
         const videoFull = document.querySelector("#movie_player > div.html5-video-container > video");
@@ -4825,6 +4854,8 @@
     }
   };
 
+  // CUSTOM[AMBIENT-BEGIN] 영상 진입/전환마다 켜진 영화 조명만 OFF. 처음 닫혀 있던 메뉴는 다시 닫는다.
+  // CUSTOM[AMBIENT-BEGIN] 처리 후 수동 변경은 유지하며 버튼 대기는 최대 15초. 아래 시작 호출도 함께 유지한다.
   function startDefaultAmbientOff() {
     let timer = null;
     let pageVideoId = "";
@@ -4882,8 +4913,11 @@
       window.addEventListener("load", schedule, { once: true });
   }
 
+  // CUSTOM[AMBIENT-END] 시작 호출까지 개조 범위이며 댓글 레이아웃 설정과 독립적으로 실행한다.
   startDefaultAmbientOff();
 
+  // CUSTOM[SUMMARY-BEGIN] 페이지 준비 3초 후 질문하기 → 동영상을 요약해 줘를 영상당 한 번 자동 클릭한다.
+  // CUSTOM[SUMMARY-BEGIN] 한국어 버튼·PAyouchat 범위, 표시/활성 검사, 제한된 재시도, 탐색 취소와 수동 요청 중복 방지를 유지한다.
   function startAutoVideoSummary() {
     const panelSelector = 'ytd-engagement-panel-section-list-renderer[target-id="PAyouchat"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]';
     const summaryText = "동영상을요약해줘";
@@ -4957,6 +4991,7 @@
       window.addEventListener("load", schedule, { once: true });
   }
 
+  // CUSTOM[SUMMARY-END] 시작 호출까지 개조 범위이며 댓글 레이아웃 설정과 독립적으로 실행한다.
   startAutoVideoSummary();
 
   const {
@@ -4965,6 +5000,7 @@
     isOpenSpeedControl,
     isOpenMarkOrRemoveAd
   } = StorageUtil.getValue(StorageUtil.keys.youtube.functionState, StorageUtil.getDefaultFunctionState());
+  // CUSTOM[ADGUARD] 전역 passthrough/default 정책 대신 AdGuard의 스크립트 정책을 사용한다.
   const createTrustedScript = (source) => {
     if (typeof ADG_policyApi !== "undefined" && ADG_policyApi.isSupported) {
       return ADG_policyApi.createScript(source);
@@ -4989,6 +5025,7 @@
     }
     const sourceURL = "debug://tabview-youtube/tabview.execution.js";
     const textContent = `(${executionScript})("${communicationKey}");${"\n\n"}//# sourceURL=${sourceURL}${"\n"}`;
+    // CUSTOM[ADGUARD] 페이지에 전달하는 레이아웃 코드에도 위의 TrustedScript 변환을 적용한다.
     GM_addElement(document.head || document.documentElement, "script", { textContent: createTrustedScript(textContent) });
     let style = document.createElement("style");
     const sourceURLMainCSS = "debug://tabview-youtube/tabview.main.css";
