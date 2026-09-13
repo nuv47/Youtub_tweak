@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.7
+// @version     1.1.5.8
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -4853,6 +4853,119 @@
       });
     }
   };
+
+  // CUSTOM[FRAMEGEN-BEGIN] Framegen 1.4.7의 실제 페이지 버튼을 사용해 영상 재생 3초 뒤 한 번 켠다.
+  // CUSTOM[FRAMEGEN-BEGIN] 숨겨진 컨트롤도 클릭 가능하다. 이미 ON이거나 수동으로 조작한 영상은 다시 토글하지 않는다.
+  // CUSTOM[FRAMEGEN-BEGIN] 광고·탐색·일시정지에서는 대기를 취소하며 확장이 없을 때의 재시도는 15초로 제한한다.
+  function startAutoFramegen() {
+    const buttonSelector = '.fc-controls-root button.fc-side[aria-label="Toggle Framegen"]';
+    let timer = null;
+    let pageKey = "";
+    let video = null;
+    let handled = false;
+    let navigating = false;
+    const currentKey = () => location.pathname === "/watch" && new URL(location.href).searchParams.get("v") || /^\/shorts\/[^/]+/.test(location.pathname) ? location.href : "";
+    const cancel = () => {
+      clearTimeout(timer);
+      timer = null;
+    };
+    const playingVideo = () => {
+      let videos;
+      if (location.pathname === "/watch") {
+        const id = new URL(location.href).searchParams.get("v");
+        const flexy = Array.from(document.querySelectorAll("ytd-watch-flexy")).find((element) => element.getAttribute("video-id") === id && !element.closest("[hidden]"));
+        videos = flexy ? flexy.querySelectorAll("#movie_player video") : [];
+      } else {
+        videos = document.querySelectorAll("video");
+      }
+      let best = null;
+      let area = 0;
+      for (const candidate of videos) {
+        if (candidate.paused || candidate.ended || candidate.readyState < 2 || candidate.closest(".ad-showing, .ad-interrupting"))
+          continue;
+        const rect = candidate.getBoundingClientRect();
+        const visible = Math.max(0, Math.min(rect.bottom, innerHeight) - Math.max(rect.top, 0)) * Math.max(0, Math.min(rect.right, innerWidth) - Math.max(rect.left, 0));
+        if (visible > area) {
+          best = candidate;
+          area = visible;
+        }
+      }
+      return best;
+    };
+    const schedule = () => {
+      if (navigating)
+        return;
+      const key = currentKey();
+      if (key !== pageKey) {
+        cancel();
+        pageKey = key;
+        video = null;
+        handled = false;
+      }
+      if (!key || handled)
+        return;
+      const nextVideo = playingVideo();
+      if (nextVideo !== video) {
+        cancel();
+        video = nextVideo;
+      }
+      if (!video || timer !== null)
+        return;
+      const expectedVideo = video;
+      const deadline = Date.now() + 18000;
+      const step = () => {
+        timer = null;
+        if (navigating || currentKey() !== key || handled || playingVideo() !== expectedVideo)
+          return;
+        const button = document.querySelector(buttonSelector);
+        if (button && (button.getAttribute("aria-pressed") === "true" || button.getAttribute("data-active") === "true")) {
+          handled = true;
+          return;
+        }
+        if (button && !button.disabled && button.getAttribute("aria-disabled") !== "true" && button.getAttribute("aria-pressed") === "false") {
+          handled = true;
+          button.click();
+          return;
+        }
+        if (Date.now() < deadline)
+          timer = setTimeout(step, 250);
+        else
+          handled = true;
+      };
+      timer = setTimeout(step, 3000);
+    };
+    document.addEventListener("playing", schedule, true);
+    for (const eventName of ["pause", "emptied", "ended"]) {
+      document.addEventListener(eventName, (event) => {
+        if (event.target === video)
+          cancel();
+      }, true);
+    }
+    document.addEventListener("click", (event) => {
+      if (event.target instanceof Element && event.target.closest(buttonSelector)) {
+        handled = true;
+        cancel();
+      }
+    }, true);
+    document.addEventListener("yt-navigate-start", () => {
+      navigating = true;
+      cancel();
+    });
+    const resume = () => {
+      navigating = false;
+      schedule();
+    };
+    document.addEventListener("yt-navigate-finish", resume);
+    window.addEventListener("pagehide", () => {
+      navigating = true;
+      cancel();
+    });
+    window.addEventListener("pageshow", resume);
+    schedule();
+  }
+
+  startAutoFramegen();
+  // CUSTOM[FRAMEGEN-END] 위 함수와 시작 호출을 함께 유지한다. Framegen의 화질·FPS 설정은 변경하지 않는다.
 
   // CUSTOM[AMBIENT-BEGIN] 영상 진입/전환마다 켜진 영화 조명만 OFF. 처음 닫혀 있던 메뉴는 다시 닫는다.
   // CUSTOM[AMBIENT-BEGIN] 처리 후 수동 변경은 유지하며 버튼 대기는 최대 15초. 아래 시작 호출도 함께 유지한다.
