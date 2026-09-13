@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.9
+// @version     1.1.5.10
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -79,7 +79,9 @@
         videoPlaySpeed: "yt/videoPlaySpeed",
         functionState: "yt/functionState_01",
         videoLoop: "py/videoLoop",
-        theme: "yt/theme"
+        theme: "yt/theme",
+        // CUSTOM[FRAMEGEN-SETTINGS] 기존 기능 설정과 분리해 업데이트 시 자동 ON·3초 기본값을 유지한다.
+        framegenAuto: "yt/framegenAuto"
       }
     },
     getDefaultFunctionState: function() {
@@ -88,6 +90,13 @@
         isOpenThemeProgressBar: true,
         isOpenSpeedControl: true,
         isOpenMarkOrRemoveAd: true
+      };
+    },
+    getFramegenSettings: function() {
+      const saved = this.getValue(this.keys.youtube.framegenAuto, null);
+      return {
+        enabled: saved?.enabled !== false,
+        delaySeconds: Number.isFinite(saved?.delaySeconds) ? Math.max(0, Math.min(60, Math.round(saved.delaySeconds))) : 3
       };
     },
     getValue: function(key, defaultValue) {
@@ -4202,7 +4211,12 @@
           "function_is_comment_table_open": "Enable video details page interface optimization.",
           "function_is_theme_progress_bar_open": "Enable video playback progress bar beautification.",
           "function_is_speed_control_open": "Enable video fast forward (playback speed selectable).",
-          "function_is_mark_or_remove_ad_open": "Enable page ad labeling.",
+          "function_is_mark_or_remove_ad_open": "Strike through ad text.",
+          // CUSTOM[SETTINGS-LABELS] 새 설정은 en/ko를 제공하고 다른 언어의 누락 항목에는 en을 사용한다.
+          "function_framegen_auto": "Turn on Framegen automatically",
+          "function_framegen_delay": "Delay after playback starts",
+          "function_framegen_seconds": "sec",
+          "function_framegen_hint": "0–60 seconds. Close settings to apply.",
         }
       },
       "ja": {
@@ -4222,7 +4236,11 @@
           "function_is_comment_table_open": "동영상 상세 페이지 인터페이스 최적화 활성화.",
           "function_is_theme_progress_bar_open": "동영상 재생 진행 바 장식 활성화.",
           "function_is_speed_control_open": "동영상 빨리감기(재생 속도 선택 가능) 활성화.",
-          "function_is_mark_or_remove_ad_open": "페이지 광고 라벨링 활성화.",
+          "function_is_mark_or_remove_ad_open": "광고 글자에 취소선 표시",
+          "function_framegen_auto": "Framegen 자동 켜기",
+          "function_framegen_delay": "재생 후 대기 시간",
+          "function_framegen_seconds": "초",
+          "function_framegen_hint": "0~60초 · 창을 닫으면 적용됩니다.",
         }
       },
       "ru": {
@@ -4685,6 +4703,8 @@
         isOpenMarkOrRemoveAd: true
       });
       const language = LangueUtil.getLanguage();
+      // CUSTOM[FRAMEGEN-SETTINGS] 자동 켜기와 대기 시간은 함께 저장하며, 기존 설정처럼 창을 닫을 때 적용한다.
+      const framegenSettings = StorageUtil.getFramegenSettings();
       const styleSheet = `
 			.row-item{
 			    background: #ffffff;
@@ -4703,12 +4723,15 @@
 			
 			.setting .setting-name{
 			    flex: 1;
+			    min-width: 0;
+			    word-break: keep-all;
 			    text-align: left;
 			    font-size: 14px;
 			}
 			
 			.setting .setting-switch{
 			    width: 60px;
+			    flex-shrink: 0;
 			    display: flex;
 			    justify-content: end;
 			}
@@ -4759,8 +4782,43 @@
 			input:checked + .toggle:before {
 			    transform: translate(24px, -50%);
 			}
-			input {
+			.dialog-gcc-content input[type="checkbox"]:not(#isFramegenAutoOpen) {
 			    display: none;
+			}
+			.dialog-gcc-content #isFramegenAutoOpen {
+			    position: absolute;
+			    width: 1px;
+			    height: 1px;
+			    opacity: 0;
+			}
+			.dialog-gcc-content #isFramegenAutoOpen:focus-visible + .toggle {
+			    outline: 2px solid currentColor;
+			    outline-offset: 3px;
+			}
+			.dialog-gcc-content label.setting-name { font-weight: normal; }
+			.dialog-gcc-content .framegen-delay {
+			    display: flex;
+			    align-items: center;
+			    gap: 6px;
+			    margin-inline-start: 10px;
+			    font-size: 14px;
+			}
+			.dialog-gcc-content #framegenDelaySeconds {
+			    display: inline-block;
+			    box-sizing: border-box;
+			    width: 64px;
+			    padding: 6px;
+			    border: 1px solid #888;
+			    border-radius: 5px;
+			    font: inherit;
+			    color: inherit;
+			    background: transparent;
+			}
+			.dialog-gcc-content #framegenDelaySeconds:disabled { opacity: 0.5; }
+			.dialog-gcc-content .setting-hint {
+			    font-size: 12px;
+			    line-height: 1.5;
+			    word-break: keep-all;
 			}
 		`;
       const content = `
@@ -4792,6 +4850,20 @@
 			  </div>
 			</div>
 			
+			<div class="row-item setting">
+			  <div class="setting-name" id="framegenAutoLabel" data-i18n="function_framegen_auto"></div>
+			  <div class="setting-switch">
+			    <input type="checkbox" id="isFramegenAutoOpen" aria-labelledby="framegenAutoLabel" /><label class="toggle" for="isFramegenAutoOpen"></label>
+			  </div>
+			</div>
+			<div class="row-item setting">
+			  <label class="setting-name" for="framegenDelaySeconds" data-i18n="function_framegen_delay"></label>
+			  <div class="framegen-delay">
+			    <input type="number" id="framegenDelaySeconds" min="0" max="60" step="1" aria-describedby="framegenSettingsHint" />
+			    <span data-i18n="function_framegen_seconds"></span>
+			  </div>
+			</div>
+			<p class="setting-hint" id="framegenSettingsHint" data-i18n="function_framegen_hint"></p>
 		`;
       Dialog.showMake({
         title: language.content.function_setting_title,
@@ -4803,9 +4875,28 @@
           const themeProgressBar = $that.dialogContent.querySelector("#isThemeProgressBarOpen");
           const speedControl = $that.dialogContent.querySelector("#isSpeedControlOpen");
           const markOrRemoveAd = $that.dialogContent.querySelector("#isMarkOrRemoveAdOpen");
-          $that.dialogContent.querySelectorAll(".setting-name").forEach((element) => {
-            element.textContent = language.content[element.getAttribute("data-i18n")];
+          const framegenAuto = $that.dialogContent.querySelector("#isFramegenAutoOpen");
+          const framegenDelay = $that.dialogContent.querySelector("#framegenDelaySeconds");
+          $that.dialogContent.querySelectorAll("[data-i18n]").forEach((element) => {
+            const key = element.getAttribute("data-i18n");
+            element.textContent = language.content[key] ?? LangueUtil.language.en.content[key];
           });
+          framegenAuto.checked = framegenSettings.enabled;
+          framegenDelay.value = framegenSettings.delaySeconds;
+          framegenDelay.disabled = !framegenSettings.enabled;
+          framegenAuto.addEventListener("change", () => {
+            framegenSettings.enabled = framegenAuto.checked;
+            framegenDelay.disabled = !framegenSettings.enabled;
+            StorageUtil.setValue(StorageUtil.keys.youtube.framegenAuto, framegenSettings);
+          });
+          framegenDelay.addEventListener("change", () => {
+            const seconds = framegenDelay.valueAsNumber;
+            if (Number.isFinite(seconds))
+              framegenSettings.delaySeconds = Math.max(0, Math.min(60, Math.round(seconds)));
+            framegenDelay.value = framegenSettings.delaySeconds;
+            StorageUtil.setValue(StorageUtil.keys.youtube.framegenAuto, framegenSettings);
+          });
+          $that.dialogContent.style.maxHeight = "min(560px, calc(100dvh - 100px))";
           commentTable.checked = functionState.isOpenCommentTable;
           themeProgressBar.checked = functionState.isOpenThemeProgressBar;
           speedControl.checked = functionState.isOpenSpeedControl;
@@ -4854,10 +4945,15 @@
     }
   };
 
-  // CUSTOM[FRAMEGEN-BEGIN] Framegen 1.4.7의 실제 페이지 버튼을 사용해 영상 재생 3초 뒤 한 번 켠다.
+  // CUSTOM[FRAMEGEN-BEGIN] Framegen 1.4.7의 실제 페이지 버튼을 사용해 설정한 대기 시간(기본 3초) 뒤 한 번 켠다.
   // CUSTOM[FRAMEGEN-BEGIN] 숨겨진 컨트롤도 클릭 가능하다. 이미 ON이거나 수동으로 조작한 영상은 다시 토글하지 않는다.
   // CUSTOM[FRAMEGEN-BEGIN] 광고·탐색·일시정지에서는 대기를 취소하며 확장이 없을 때의 재시도는 15초로 제한한다.
   function startAutoFramegen() {
+    // CUSTOM[FRAMEGEN-SETTINGS] 설정 OFF면 감시도 시작하지 않는다. 대기 시간 뒤 버튼 재시도는 최대 15초다.
+    const settings = StorageUtil.getFramegenSettings();
+    if (!settings.enabled)
+      return;
+    const delayMs = settings.delaySeconds * 1000;
     const buttonSelector = '.fc-controls-root button.fc-side[aria-label="Toggle Framegen"]';
     let timer = null;
     let pageKey = "";
@@ -4923,7 +5019,7 @@
         return;
       }
       const expectedVideo = video;
-      const deadline = Date.now() + 18000;
+      const deadline = Date.now() + delayMs + 15000;
       const step = () => {
         timer = null;
         if (navigating || currentKey() !== key || handled || playingVideo() !== expectedVideo)
@@ -4943,7 +5039,7 @@
         else
           handled = true;
       };
-      timer = setTimeout(step, 3000);
+      timer = setTimeout(step, delayMs);
     };
     document.addEventListener("playing", schedule, true);
     for (const eventName of ["pause", "emptied", "ended"]) {
