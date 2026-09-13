@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.10
+// @version     1.1.5.11
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -81,7 +81,8 @@
         videoLoop: "py/videoLoop",
         theme: "yt/theme",
         // CUSTOM[FRAMEGEN-SETTINGS] 기존 기능 설정과 분리해 업데이트 시 자동 ON·3초 기본값을 유지한다.
-        framegenAuto: "yt/framegenAuto"
+        framegenAuto: "yt/framegenAuto",
+        blockHomeMiniplayer: "yt/blockHomeMiniplayer"
       }
     },
     getDefaultFunctionState: function() {
@@ -4213,6 +4214,7 @@
           "function_is_speed_control_open": "Enable video fast forward (playback speed selectable).",
           "function_is_mark_or_remove_ad_open": "Strike through ad text.",
           // CUSTOM[SETTINGS-LABELS] 새 설정은 en/ko를 제공하고 다른 언어의 누락 항목에는 en을 사용한다.
+          "function_block_home_miniplayer": "Block automatic miniplayer on Home",
           "function_framegen_auto": "Turn on Framegen automatically",
           "function_framegen_delay": "Delay after playback starts",
           "function_framegen_seconds": "sec",
@@ -4237,6 +4239,7 @@
           "function_is_theme_progress_bar_open": "동영상 재생 진행 바 장식 활성화.",
           "function_is_speed_control_open": "동영상 빨리감기(재생 속도 선택 가능) 활성화.",
           "function_is_mark_or_remove_ad_open": "광고 글자에 취소선 표시",
+          "function_block_home_miniplayer": "홈에서 자동 미니플레이어 차단",
           "function_framegen_auto": "Framegen 자동 켜기",
           "function_framegen_delay": "재생 후 대기 시간",
           "function_framegen_seconds": "초",
@@ -4782,16 +4785,16 @@
 			input:checked + .toggle:before {
 			    transform: translate(24px, -50%);
 			}
-			.dialog-gcc-content input[type="checkbox"]:not(#isFramegenAutoOpen) {
+			.dialog-gcc-content input[type="checkbox"]:not(.custom-setting-toggle) {
 			    display: none;
 			}
-			.dialog-gcc-content #isFramegenAutoOpen {
+			.dialog-gcc-content .custom-setting-toggle {
 			    position: absolute;
 			    width: 1px;
 			    height: 1px;
 			    opacity: 0;
 			}
-			.dialog-gcc-content #isFramegenAutoOpen:focus-visible + .toggle {
+			.dialog-gcc-content .custom-setting-toggle:focus-visible + .toggle {
 			    outline: 2px solid currentColor;
 			    outline-offset: 3px;
 			}
@@ -4851,9 +4854,15 @@
 			</div>
 			
 			<div class="row-item setting">
+			  <div class="setting-name" id="blockHomeMiniplayerLabel" data-i18n="function_block_home_miniplayer"></div>
+			  <div class="setting-switch">
+			    <input type="checkbox" class="custom-setting-toggle" id="blockHomeMiniplayer" aria-labelledby="blockHomeMiniplayerLabel" /><label class="toggle" for="blockHomeMiniplayer"></label>
+			  </div>
+			</div>
+			<div class="row-item setting">
 			  <div class="setting-name" id="framegenAutoLabel" data-i18n="function_framegen_auto"></div>
 			  <div class="setting-switch">
-			    <input type="checkbox" id="isFramegenAutoOpen" aria-labelledby="framegenAutoLabel" /><label class="toggle" for="isFramegenAutoOpen"></label>
+			    <input type="checkbox" class="custom-setting-toggle" id="isFramegenAutoOpen" aria-labelledby="framegenAutoLabel" /><label class="toggle" for="isFramegenAutoOpen"></label>
 			  </div>
 			</div>
 			<div class="row-item setting">
@@ -4875,6 +4884,11 @@
           const themeProgressBar = $that.dialogContent.querySelector("#isThemeProgressBarOpen");
           const speedControl = $that.dialogContent.querySelector("#isSpeedControlOpen");
           const markOrRemoveAd = $that.dialogContent.querySelector("#isMarkOrRemoveAdOpen");
+          const blockHomeMiniplayer = $that.dialogContent.querySelector("#blockHomeMiniplayer");
+          blockHomeMiniplayer.checked = StorageUtil.getValue(StorageUtil.keys.youtube.blockHomeMiniplayer, true) !== false;
+          blockHomeMiniplayer.addEventListener("change", () => {
+            StorageUtil.setValue(StorageUtil.keys.youtube.blockHomeMiniplayer, blockHomeMiniplayer.checked);
+          });
           const framegenAuto = $that.dialogContent.querySelector("#isFramegenAutoOpen");
           const framegenDelay = $that.dialogContent.querySelector("#framegenDelaySeconds");
           $that.dialogContent.querySelectorAll("[data-i18n]").forEach((element) => {
@@ -4944,6 +4958,95 @@
       });
     }
   };
+
+  // CUSTOM[HOME-MINIPLAYER-BEGIN] 홈에서만 자동 미니플레이어를 가리고, 전용 닫기 버튼으로 재생까지 종료한다.
+  // CUSTOM[HOME-MINIPLAYER-BEGIN] 기본 ON이며 설정 OFF면 감시하지 않는다. 초기 탐색 후 네이티브 플레이어 영역만 감시한다.
+  function startBlockHomeMiniplayer() {
+    if (StorageUtil.getValue(StorageUtil.keys.youtube.blockHomeMiniplayer, true) === false)
+      return;
+    const attribute = "data-youtub-block-home-miniplayer";
+    let observer = null;
+    let timer = null;
+    let style = null;
+    let clickedButtons = new WeakSet();
+    let watchedTargets = [];
+    const stop = () => {
+      observer?.disconnect();
+      observer = null;
+      watchedTargets = [];
+      clearTimeout(timer);
+      timer = null;
+    };
+    const closeMiniplayer = () => {
+      if (location.pathname !== "/")
+        return;
+      const player = document.querySelector("ytd-miniplayer #movie_player, #movie_player.ytp-player-minimized");
+      if (!player)
+        return;
+      for (const video of player.querySelectorAll("video")) {
+        if (!video.paused)
+          video.pause();
+      }
+      const closeButton = player.querySelector(".ytp-miniplayer-close-button");
+      if (closeButton && !closeButton.disabled && !clickedButtons.has(closeButton)) {
+        clickedButtons.add(closeButton);
+        closeButton.click();
+      }
+      // CUSTOM[HOME-MINIPLAYER-STATE] 닫기 이벤트 후에도 남는 네이티브 축소 상태를 해제한다.
+      if (player.classList.contains("ytp-player-minimized") && typeof player.setMinimized === "function")
+        player.setMinimized(false);
+
+    };
+    const observeNativePlayer = () => {
+      if (location.pathname !== "/")
+        return;
+      const targets = [document.querySelector("ytd-miniplayer"), document.querySelector("#movie_player")].filter(Boolean);
+      if (targets.length && (targets.length !== watchedTargets.length || targets.some((target, index) => target !== watchedTargets[index]))) {
+        observer.disconnect();
+        watchedTargets = targets;
+        for (const target of targets)
+          observer.observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "active", "hidden"] });
+        clearTimeout(timer);
+        timer = null;
+      }
+      closeMiniplayer();
+    };
+    const sync = () => {
+      stop();
+      clickedButtons = new WeakSet();
+      const root = document.documentElement;
+      if (!root)
+        return;
+      const home = location.pathname === "/";
+      root.toggleAttribute(attribute, home);
+      if (!home)
+        return;
+      if (!style) {
+        style = document.createElement("style");
+        style.textContent = "html[" + attribute + "] ytd-miniplayer, html[" + attribute + "] #movie_player.ytp-player-minimized { display: none !important; }";
+        (document.head || root).appendChild(style);
+      }
+      observer = new MutationObserver(observeNativePlayer);
+      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "active", "hidden"] });
+      timer = setTimeout(stop, 15000);
+      observeNativePlayer();
+    };
+    document.addEventListener("playing", (event) => {
+      if (location.pathname === "/" && event.target.matches?.("ytd-miniplayer #movie_player video, #movie_player.ytp-player-minimized video"))
+        sync();
+    }, true);
+    document.addEventListener("yt-navigate-start", sync);
+    document.addEventListener("yt-navigate-finish", sync);
+    window.addEventListener("popstate", sync);
+    window.addEventListener("pagehide", stop);
+    window.addEventListener("pageshow", sync);
+    if (document.readyState === "loading")
+      document.addEventListener("DOMContentLoaded", sync, { once: true });
+    else
+      sync();
+  }
+  startBlockHomeMiniplayer();
+  // CUSTOM[HOME-MINIPLAYER-END] 일반 영상 페이지·홈 미리보기·브라우저 PiP에는 적용하지 않는다.
 
   // CUSTOM[FRAMEGEN-BEGIN] Framegen 1.4.7의 실제 페이지 버튼을 사용해 설정한 대기 시간(기본 3초) 뒤 한 번 켠다.
   // CUSTOM[FRAMEGEN-BEGIN] 숨겨진 컨트롤도 클릭 가능하다. 이미 ON이거나 수동으로 조작한 영상은 다시 토글하지 않는다.
