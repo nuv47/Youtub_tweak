@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.8
+// @version     1.1.5.9
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -4864,6 +4864,7 @@
     let video = null;
     let handled = false;
     let navigating = false;
+    let videoDeadline = 0;
     const currentKey = () => location.pathname === "/watch" && new URL(location.href).searchParams.get("v") || /^\/shorts\/[^/]+/.test(location.pathname) ? location.href : "";
     const cancel = () => {
       clearTimeout(timer);
@@ -4901,6 +4902,7 @@
         pageKey = key;
         video = null;
         handled = false;
+        videoDeadline = Date.now() + 15000;
       }
       if (!key || handled)
         return;
@@ -4909,8 +4911,17 @@
         cancel();
         video = nextVideo;
       }
-      if (!video || timer !== null)
+      if (timer !== null)
         return;
+      // CUSTOM[FRAMEGEN-READY] playing/탐색 완료보다 video-id와 플레이어 DOM이 늦게 준비될 수 있다.
+      if (!video) {
+        if (Date.now() < videoDeadline)
+          timer = setTimeout(() => {
+            timer = null;
+            schedule();
+          }, 250);
+        return;
+      }
       const expectedVideo = video;
       const deadline = Date.now() + 18000;
       const step = () => {
