@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.11
+// @version     1.1.5.12
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -28,6 +28,7 @@
 // CUSTOM[METADATA] 위의 youtub 이름, en/ko 설명, 별도 namespace, 자체 GitHub 업데이트 주소를 유지한다.
 // CUSTOM[METADATA] www.youtube.com HTTPS 범위와 현재 필요한 GM 권한만 유지하고 배포 시 자체 버전을 올린다.
 // CUSTOM[MERGE-GUIDE] 삭제한 불필요한 권한, 상시 타이머, 전역 Trusted Types 우회도 원본에서 되살리지 않는다.
+// CUSTOM[PRIVACY] 외부 동영상 다운로드 기능·제휴 링크·탭 열기 권한은 제거했으므로 원본 병합 때 복원하지 않는다.
 (function () {
   'use strict';
 
