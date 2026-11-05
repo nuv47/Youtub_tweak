@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.12
+// @version     1.1.5.13
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -86,12 +86,13 @@
         blockHomeMiniplayer: "yt/blockHomeMiniplayer"
       }
     },
-    getDefaultFunctionState: function() {
+    getFunctionState: function() {
       return {
         isOpenCommentTable: true,
         isOpenThemeProgressBar: true,
         isOpenSpeedControl: true,
-        isOpenMarkOrRemoveAd: true
+        isOpenMarkOrRemoveAd: true,
+        ...this.getValue(this.keys.youtube.functionState, {})
       };
     },
     getFramegenSettings: function() {
@@ -889,52 +890,25 @@
       let isRightTabsInserted = false;
       const rightTabsProvidedPromise = new PromiseExternal();
       const infoExpanderElementProvidedPromise = new PromiseExternal();
-      const pluginsDetected = {};
-      const pluginDetectObserver = new MutationObserver((mutations) => {
-        let changeOnRoot = false;
-        let newPlugins = [];
-        const attributeChangedSet = /* @__PURE__ */ new Set();
-        for (const mutation of mutations) {
-          if (mutation.target === document)
-            changeOnRoot = true;
-          let detected = "";
-          switch (mutation.attributeName) {
-            case "data-ytlstm-new-layout":
-            case "data-ytlstm-overlay-text-shadow":
-            case "data-ytlstm-theater-mode":
-              detected = "external.ytlstm";
-              attributeChangedSet.add(detected);
-              break;
-          }
-          if (detected && !pluginsDetected[detected]) {
-            pluginsDetected[detected] = true;
-            newPlugins.push(detected);
-          }
-        }
-        if (elements.flexy && attributeChangedSet.has("external.ytlstm")) {
-          elements.flexy.setAttribute(
+      // CUSTOM[PERFORMANCE] 다른 확장 감지는 실제 사용하는 세 속성만 구독한다.
+      const pluginAttributes = {
+        attributeFilter: ["data-ytlstm-new-layout", "data-ytlstm-overlay-text-shadow", "data-ytlstm-theater-mode"]
+      };
+      const pluginDetectObserver = new MutationObserver(() => {
+        if (elements.flexy) {
+          elements.flexy.setAttribute111(
             "tyt-external-ytlstm",
             document.querySelector("[data-ytlstm-theater-mode]") ? "1" : "0"
           );
         }
-        if (changeOnRoot) {
-          pluginDetectObserver.observe(document.body, { attributes: true });
-        }
-        for (const detected of newPlugins) {
-          const pluginItem = plugin[`${detected}`];
-          if (pluginItem) {
-            pluginItem.activate();
-          } else {
-          }
-        }
+        plugin["external.ytlstm"].activate();
       });
-      pluginDetectObserver.observe(document.documentElement, { attributes: true });
+      pluginDetectObserver.observe(document.documentElement, pluginAttributes);
       if (document.body)
-        pluginDetectObserver.observe(document.body, { attributes: true });
+        pluginDetectObserver.observe(document.body, pluginAttributes);
       navigateFinishedPromise.then(() => {
-        pluginDetectObserver.observe(document.documentElement, { attributes: true });
         if (document.body)
-          pluginDetectObserver.observe(document.body, { attributes: true });
+          pluginDetectObserver.observe(document.body, pluginAttributes);
       });
       const funcCanCollapse = function(s) {
         const content = this.content || this.$.content;
@@ -1059,7 +1033,8 @@
       let lastRoRightTabsWidth = 0;
       const roRightTabs = new ResizeObserver((entries) => {
         const entry = entries[entries.length - 1];
-        const width = Math.round(entry.borderBoxSize.inlineSize);
+        const borderBox = entry.borderBoxSize?.[0] ?? entry.borderBoxSize;
+        const width = Math.round(borderBox?.inlineSize ?? entry.contentRect.width);
         if (lastRoRightTabsWidth !== width) {
           lastRoRightTabsWidth = width;
           if ((tabAStatus & 2) === 2) {
@@ -2498,7 +2473,7 @@
             return;
           elements.comments = hostElement;
           Promise.resolve(hostElement).then(eventMap["settingCommentsVideoId"]).catch(console.warn);
-          aoComment.observe(hostElement, { attributes: true });
+          aoComment.observe(hostElement, { attributeFilter: ["hidden", "tyt-comments-video-id", "tyt-comments-data-status"] });
           hostElement.setAttribute111("tyt-comments-area", "");
           const lockId = lockSet["rightTabReadyLock02"];
           await rightTabsProvidedPromise.then();
@@ -2512,8 +2487,6 @@
           if (hostElement && !hostElement.closest("#right-tabs")) {
             document.querySelector("#tab-comments").assignChildren111(null, hostElement, null);
           } else {
-            const shouldTabVisible = elements.comments && elements.comments.closest("#tab-comments") && !elements.comments.closest("[hidden]");
-            document.querySelector('[tyt-tab-content="#tab-comments"]').classList.toggle("tab-btn-hidden", !shouldTabVisible);
             Promise.resolve(lockSet["removeKeepCommentsScrollerLock"]).then(removeKeepCommentsScroller).catch(console.warn);
           }
           // CUSTOM[COMMENTS] 댓글 연결 시 실제 숨김 상태를 반영한 뒤 기본 선택해 빈 패널을 방지한다.
@@ -2751,7 +2724,7 @@
                 if (p)
                   fixInlineExpanderContent();
               });
-              mo.observe(inlineExpanderElm, { attributes: ["is-expanded", "attr-6v8qu", "hidden"], subtree: true });
+              mo.observe(inlineExpanderElm, { attributeFilter: ["is-expanded", "attr-6v8qu", "hidden"], subtree: true });
               inlineExpanderElm.incAttribute111("attr-6v8qu");
               const cnt = insp(inlineExpanderElm);
               if (cnt)
@@ -2870,20 +2843,19 @@
                 if (t !== ath)
                   return;
                 const isBlankPage = !this.data || this.collapsed;
-                const p1 = new Promise((resolve) => setTimeout_(resolve, 706)).catch(console.warn);
-                const p2 = new Promise((resolve) => {
-                  new IntersectionObserver((entries, observer) => {
-                    for (const entry of entries) {
-                      const rect = entry.boundingClientRect || 0;
-                      if (isBlankPage || rect.width > 0 && rect.height > 0) {
-                        observer.disconnect();
-                        resolve("#");
-                        break;
-                      }
-                    }
-                  }).observe(chatframe);
-                }).catch(console.warn);
-                await Promise.race([p1, p2]);
+                await new Promise((resolve) => {
+                  const finish = () => {
+                    clearTimeout(timer);
+                    observer.disconnect();
+                    resolve();
+                  };
+                  const observer = new IntersectionObserver((entries) => {
+                    if (isBlankPage || entries.some(({ boundingClientRect }) => boundingClientRect.width > 0 && boundingClientRect.height > 0))
+                      finish();
+                  });
+                  const timer = setTimeout_(finish, 706);
+                  observer.observe(chatframe);
+                });
                 if (t !== ath)
                   return;
               }
@@ -2918,13 +2890,13 @@
             return;
           if (chatElem === hostElement) {
             elements.chat = chatElem;
-            aoChat.observe(chatElem, { attributes: true });
+            aoChat.observe(chatElem, { attributeFilter: ["collapsed", "tyt-active-chat-frame"] });
             const isFlexyReady = elements.flexy instanceof Element;
             chatElem.setAttribute111("tyt-active-chat-frame", isFlexyReady ? "CF" : "C");
             const chatContainer = chatElem ? chatElem.closest("#chat-container") || chatElem : null;
             if (chatContainer && !chatContainer.hasAttribute000("tyt-chat-container")) {
               for (const p2 of document.querySelectorAll("[tyt-chat-container]")) {
-                p2.removeAttribute000("[tyt-chat-container]");
+                p2.removeAttribute000("tyt-chat-container");
               }
               chatContainer.setAttribute111("tyt-chat-container", "");
             }
@@ -3673,75 +3645,30 @@
     addStyle: function(style) {
       GM_addStyle(style);
     },
-    // CUSTOM[PERFORMANCE] 10ms 반복 조회 대신 DOM 감시를 사용하고 성공/시간 초과 시 감시·타이머를 정리한다.
-    waitForElement: function(selector, target = document.body, allowEmpty = true, maxDelay = 10 * 1e3) {
-      return new Promise((resolve) => {
-        const root = target || document.documentElement;
-        const findMatch = () => {
-          const element = root.querySelector(selector);
-          return allowEmpty ? element : element && element.innerHTML ? element : null;
-        };
-        const initialMatch = findMatch();
-        if (initialMatch) {
-          resolve(initialMatch);
-          return;
-        }
-        let settled = false;
-        let timeoutId = null;
-        let observer = null;
-        const finish = (element) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          observer.disconnect();
-          if (timeoutId !== null) {
-            clearTimeout(timeoutId);
-          }
-          resolve(element);
-        };
-        observer = new MutationObserver(() => {
-          const element = findMatch();
-          if (element) {
-            finish(element);
-          }
-        });
-        observer.observe(root, { childList: true, subtree: true });
-        timeoutId = setTimeout(() => finish(null), maxDelay);
+    bindHoverMenu: function(button, menu, player) {
+      let hideTimer;
+      button.addEventListener("mouseenter", () => {
+        clearTimeout(hideTimer);
+        menu.style.display = "block";
+        const container = player.getBoundingClientRect();
+        const anchor = button.getBoundingClientRect();
+        menu.style.left = `${anchor.left - container.left + (anchor.width - menu.offsetWidth) / 2}px`;
+        menu.style.top = `${anchor.top - container.top - menu.clientHeight}px`;
       });
+      button.addEventListener("mouseleave", () => {
+        hideTimer = setTimeout(() => { menu.style.display = "none"; }, 100);
+      });
+      menu.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+      menu.addEventListener("mouseleave", () => { menu.style.display = "none"; });
     }
   };
 
   const SpeedControl = {
     currentSpeed: 1,
-    activeAnimationId: null,
-    run: function() {
-      if (!/youtube\.com/.test(window.location.host)) {
-        return new Promise((resolve) => {
-          resolve();
-        });
-      }
-      return new Promise((resolve) => {
-        // CUSTOM[SPEED] 실제 배속 기능 설정 키와 저장값을 검증하고 잘못된 배속은 1배속으로 복구한다.
-        const functionState = StorageUtil.getValue(
-          StorageUtil.keys.youtube.functionState,
-          StorageUtil.getDefaultFunctionState()
-        );
-        if (!functionState.isOpenSpeedControl) {
-          resolve();
-          return;
-        }
-        const storageSpeed = StorageUtil.getValue(StorageUtil.keys.youtube.videoPlaySpeed, 1);
-        const parsedSpeed = Number.parseFloat(storageSpeed);
-        this.currentSpeed = Number.isFinite(parsedSpeed) && parsedSpeed > 0 ? parsedSpeed : 1;
-        this.insertStyle();
-        commonUtil.onPageLoad(async () => {
-          await this.genrate();
-          this.setVideoRate(this.currentSpeed);
-          this.videoObserver();
-          resolve();
-        });
-      });
+    start: function() {
+      const speed = Number(StorageUtil.getValue(StorageUtil.keys.youtube.videoPlaySpeed, 1));
+      this.currentSpeed = speed >= 0.0625 && speed <= 16 ? speed : 1;
+      this.insertStyle();
     },
     insertStyle: function() {
       const speedBtnStyle = `
@@ -3807,22 +3734,18 @@
 		`;
       commonUtil.addStyle(speedBtnStyle + speedShowStyle + speedOptionsStyle);
     },
-    genrate: async function() {
+    mount: function(player, controls) {
+      if (controls.querySelector(".SpeedControl_Extension_Btn_X"))
+        return;
+      player.querySelector("#SpeedControl_Extension_Speed-Options")?.remove();
       const speedControlBtn = document.createElement("div");
       speedControlBtn.className = "ytp-button SpeedControl_Extension_Btn_X";
       const speedText = document.createElement("span");
       speedText.textContent = "" + this.currentSpeed + "×";
       speedControlBtn.appendChild(speedText);
-      // CUSTOM[PERFORMANCE] 배속 UI도 제한 시간 있는 DOM 대기를 사용한다.
-      const player = await commonUtil.waitForElement("#player-container-outer .html5-video-player");
-      if (player) {
-        const rightControls = player.querySelector(".ytp-right-controls");
-        const ScreenShot_Codehemu_Btn = document.querySelector(".SpeedControl_Extension_Btn_X");
-        if (rightControls && !ScreenShot_Codehemu_Btn) {
-          rightControls.prepend(speedControlBtn);
-          this.genrateOptions(speedControlBtn, player);
-        }
-      }
+      controls.prepend(speedControlBtn);
+      this.genrateOptions(speedControlBtn, player);
+      this.setVideoRate(this.currentSpeed, player.querySelector("video"));
     },
     genrateOptions: function(button, player) {
       const speedOptions = document.createElement("div");
@@ -3839,9 +3762,10 @@
         }
         speedOptions.appendChild(option);
         option.addEventListener("click", (event) => {
+          if (!event.isTrusted) return;
           const speedValue = parseFloat(speed);
-          this.speedDisplayText("" + speedValue + "×");
-          this.setVideoRate(speedValue);
+          this.speedDisplayText(player, speedValue + "×");
+          this.setVideoRate(speedValue, player.querySelector("video"));
           this.currentSpeed = speedValue;
           this.updateVideoPlaySpeedStorage(speedValue);
           button.querySelector("span").textContent = "" + speedValue + "×";
@@ -3852,97 +3776,23 @@
         });
       });
       player.appendChild(speedOptions);
-      let isHovering = false;
-      button.addEventListener("mouseenter", () => {
-        speedOptions.style.display = "block";
-        var containerRect = player.getBoundingClientRect();
-        var buttonRect = button.getBoundingClientRect();
-        var speedOptionsRect = speedOptions.getBoundingClientRect();
-        var left = buttonRect.left - containerRect.left - speedOptionsRect.width / 2 + buttonRect.width / 2;
-        var top = buttonRect.top - containerRect.top - speedOptions.clientHeight;
-        speedOptions.style.left = `${left}px`;
-        speedOptions.style.top = `${top}px`;
-      });
-      button.addEventListener("mouseleave", () => {
-        isHovering = false;
-        setTimeout(() => {
-          if (!isHovering) {
-            speedOptions.style.display = "none";
-          }
-        }, 100);
-      });
-      speedOptions.addEventListener("mouseenter", () => {
-        isHovering = true;
-      });
-      speedOptions.addEventListener("mouseleave", () => {
-        isHovering = false;
-        speedOptions.style.display = "none";
-      });
+      commonUtil.bindHoverMenu(button, speedOptions, player);
     },
     updateVideoPlaySpeedStorage: function(speedValue) {
       StorageUtil.setValue(StorageUtil.keys.youtube.videoPlaySpeed, speedValue);
     },
-    speedDisplayText: function(speedText) {
-      let elementId = "youtube-extension-text-box";
-      let element = document.getElementById(elementId);
-      if (!element) {
-        let mediaElement = document.getElementById("movie_player");
-        // CUSTOM[SPEED] 플레이어 부재를 처리하고 배속 표시는 HTML 문자열 대신 DOM/textContent로 만든다.
-        if (!mediaElement) {
-          return;
-        }
-        element = document.createElement("div");
-        element.id = elementId;
-        element.textContent = speedText;
-        mediaElement.prepend(element);
-      } else {
-        element.textContent = speedText;
-      }
-      element.style.display = "block";
-      element.style.opacity = 0.8;
-      element.style.filter = `alpha(opacity=${0.8 * 100})`;
-      this.startFadeoutAnimation(element);
+    speedDisplayText: function(player, text) {
+      // CUSTOM[SPEED] 프레임마다 스타일을 쓰지 않고 브라우저가 배속 표시를 페이드아웃한다.
+      player.querySelector("#youtube-extension-text-box")?.remove();
+      const label = document.createElement("div");
+      label.id = "youtube-extension-text-box";
+      label.textContent = text;
+      player.prepend(label);
+      label.animate([{ opacity: 0.8 }, { opacity: 0 }], 1500).onfinish = () => label.remove();
     },
-    startFadeoutAnimation: function(element, startOpacity = 0.9, duration = 1500) {
-      let opacity = startOpacity;
-      const startTime = performance.now();
-      if (this.activeAnimationId) {
-        cancelAnimationFrame(this.activeAnimationId);
-      }
-      const fadeStep = (timestamp) => {
-        const elapsed = timestamp - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        opacity = startOpacity * (1 - progress);
-        element.style.opacity = opacity;
-        element.style.filter = `alpha(opacity=${opacity * 100})`;
-        if (progress < 1) {
-          this.activeAnimationId = requestAnimationFrame(fadeStep);
-        } else {
-          element.style.display = "none";
-          this.activeAnimationId = null;
-        }
-      };
-      this.activeAnimationId = requestAnimationFrame(fadeStep);
-    },
-    setVideoRate: function(speed) {
-      // CUSTOM[SPEED] 양의 유한 배속만 주 플레이어에 적용한다.
-      const playbackRate = Number(speed);
-      const videoElement = document.querySelector("#movie_player video");
-      if (!videoElement || !Number.isFinite(playbackRate) || playbackRate <= 0)
-        return;
-      videoElement.playbackRate = playbackRate;
-    },
-    // CUSTOM[PERFORMANCE] 상시 조회와 src 속성 감시 대신 loadedmetadata로 새 영상에 배속을 적용한다.
-    videoObserver: function() {
-      const applyCurrentSpeed = (videoElement) => {
-        if (videoElement instanceof HTMLVideoElement && videoElement.closest("#movie_player")) {
-          videoElement.playbackRate = this.currentSpeed;
-        }
-      };
-      document.addEventListener("loadedmetadata", (event) => {
-        applyCurrentSpeed(event.target);
-      }, true);
-      applyCurrentSpeed(document.querySelector("#movie_player video"));
+    setVideoRate: function(speed, video) {
+      if (video && video.playbackRate !== speed)
+        video.playbackRate = speed;
     }
   };
 
@@ -4006,17 +3856,17 @@
       location.reload();
     },
     isDarkTheme: function(enabled, isReload) {
-      const cookies = document.cookie.split("; ");
-      let prefCookie = cookies.find((cookie) => cookie.startsWith("PREF="));
-      let prefValue = prefCookie ? prefCookie.split("=")[1] : "f6=400";
-      prefValue = prefValue.replace(/&f6=\d+/, "").replace(/f6=\d+/, "");
-      const prefix = prefValue ? "&" : "";
-      if (enabled) {
-        prefValue += prefix + "f6=400";
-      } else {
-        prefValue += prefix + "f6=80000";
-      }
-      document.cookie = `PREF=${prefValue}; path=/; domain=.youtube.com; secure`;
+      // CUSTOM[THEME] PREF의 다른 설정과 f6 안의 테마 외 비트를 보존한다.
+      const previous = document.cookie.split(/;\s*/).find(cookie => cookie.startsWith("PREF="))?.slice(5) || "";
+      const fields = previous ? previous.split("&") : [];
+      const index = fields.findIndex(field => field.startsWith("f6="));
+      const hex = fields[index]?.slice(3) || "0";
+      const flags = /^[\da-f]+$/i.test(hex) ? BigInt("0x" + hex) : 0n;
+      const theme = (flags & ~0x80400n) | (enabled ? 0x400n : 0x80000n);
+      fields[index < 0 ? fields.length : index] = "f6=" + theme.toString(16);
+      const updated = fields.join("&");
+      if (updated !== previous)
+        document.cookie = `PREF=${updated}; path=/; domain=.youtube.com; secure`;
       if (isReload) {
         this.reloadYouTube();
       }
@@ -4024,54 +3874,31 @@
   };
 
   const Screenshot = {
-    start: function() {
-      var SF_Codhemeu = "png";
-      var extension = "png";
-      var appendixTitle = "screenshot." + extension;
-      var title;
-      var headerEls = document.querySelectorAll(
-        "h1.title.ytd-video-primary-info-renderer"
-      );
-      function SetTitle() {
-        if (headerEls.length > 0) {
-          title = headerEls[0].innerText.trim();
-          return true;
-        } else {
-          return false;
+    start: function(video) {
+      if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+      const title = document.querySelector("ytd-watch-flexy:not([hidden]) ytd-watch-metadata h1, h1.title.ytd-video-primary-info-renderer, h1.watch-title-container")?.textContent.trim();
+      const seconds = Math.floor(video.currentTime);
+      const hours = Math.floor(seconds / 3600);
+      const timestamp = [hours || null, Math.floor(seconds / 60) % 60, seconds % 60].filter(part => part !== null).join("-");
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.drawImage(video, 0, 0);
+      canvas.toBlob(blob => {
+        if (!blob) return;
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.download = [title, timestamp, "screenshot.png"].filter(Boolean).join(" ");
+        link.href = url;
+        try {
+          link.click();
+        } finally {
+          // CUSTOM[SCREENSHOT] 다운로드 시작 후 PNG가 탭 메모리에 계속 남지 않게 한다.
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
-      }
-      if (SetTitle() == false) {
-        headerEls = document.querySelectorAll("h1.watch-title-container");
-        if (SetTitle() == false)
-          title = "";
-      }
-      var player = document.getElementsByClassName("video-stream")[0];
-      var time = player.currentTime;
-      title += " ";
-      let minutes = Math.floor(time / 60);
-      time = Math.floor(time - minutes * 60);
-      if (minutes > 60) {
-        let hours = Math.floor(minutes / 60);
-        minutes -= hours * 60;
-        title += hours + "-";
-      }
-      title += minutes + "-" + time;
-      title += " " + appendixTitle;
-      var canvas = document.createElement("canvas");
-      canvas.width = player.videoWidth;
-      canvas.height = player.videoHeight;
-      canvas.getContext("2d").drawImage(player, 0, 0, canvas.width, canvas.height);
-      var downloadLink = document.createElement("a");
-      downloadLink.download = title;
-      function DownloadBlob(blob) {
-        downloadLink.href = URL.createObjectURL(blob);
-        downloadLink.click();
-      }
-      {
-        canvas.toBlob(async function(blob) {
-          DownloadBlob(blob);
-        }, "image/" + SF_Codhemeu);
-      }
+      }, "image/png");
     }
   };
 
@@ -4079,6 +3906,8 @@
     class Dialog2 {
       constructor() {
         this.mask = document.createElement("div");
+        // Keep the site's DOM queries, labels and scripts separate from the GM settings form.
+        this.root = this.mask.attachShadow({ mode: "closed" });
         this.dialogStyle = document.createElement("style");
         this.mask.classList.add("dialog-gcc-mask");
         this.setStyle(this.mask, {
@@ -4105,7 +3934,7 @@
           "transform": "translate(-50%,-50%)",
           "borderRadius": "5px"
         });
-        this.mask.appendChild(this.content);
+        this.root.append(this.dialogStyle, this.content);
       }
       middleBox(param) {
         // CUSTOM[TRUSTED-HTML] 비우기에는 HTML 대입 대신 DOM API를 사용한다.
@@ -4152,20 +3981,20 @@
         });
         this.title.appendChild(this.closeBtn);
         this.content.appendChild(this.title);
-        this.closeBtn.onclick = (e) => {
+        this.closeBtn.addEventListener("click", (e) => {
+          if (!e.isTrusted) return;
           e.stopPropagation();
           e.preventDefault();
           this.close();
           if (param.onClose) {
             param.onClose();
           }
-        };
+        });
       }
       showMake(param) {
         if (param.hasOwnProperty("styleSheet")) {
           this.dialogStyle.textContent = param.styleSheet;
         }
-        document.querySelector("head").appendChild(this.dialogStyle);
         this.middleBox(param);
         this.dialogContent = document.createElement("div");
         this.dialogContent.classList.add("dialog-gcc-content");
@@ -4185,8 +4014,7 @@
         }
       }
       close() {
-        document.body.removeChild(this.mask);
-        document.querySelector("head").removeChild(this.dialogStyle);
+        this.mask.remove();
       }
       setStyle(ele, styleObj) {
         for (let attr in styleObj) {
@@ -4356,12 +4184,7 @@
     }
   };
   const ToolBox = {
-    getFunctionState: function() {
-      return StorageUtil.getValue(
-        StorageUtil.keys.youtube.functionState,
-        StorageUtil.getDefaultFunctionState()
-      );
-    },
+    loopEnabled: false,
     insertStyle: function() {
       const speedOptionsStyle = `
 			.toolbox_extension_container {
@@ -4513,9 +4336,7 @@
       });
       return svg;
     },
-    genrateTools: function(parent) {
-      const loopElementId = "_loop_" + Math.ceil(Math.random() * 1e8);
-      this.getFunctionState();
+    genrateTools: function(parent, player) {
       const switchTheme = () => {
         let currentTheme = StorageUtil.getValue(StorageUtil.keys.youtube.theme, null);
         if (currentTheme == "light" || !currentTheme) {
@@ -4527,14 +4348,14 @@
         Theme.setTheme(currentTheme, true);
       };
       const screenshot = () => {
-        Screenshot.start();
+        Screenshot.start(player.querySelector("video"));
       };
       const showSettingDialog = () => {
         this.showSettingDialog();
       };
       // CUSTOM[PIP] 주 플레이어와 Picture-in-Picture API 존재를 확인한 뒤 실행한다.
       const pictureToPicture = () => {
-        const video = document.querySelector("#movie_player video");
+        const video = player.querySelector("video");
         if (video && "pictureInPictureEnabled" in document && typeof video.requestPictureInPicture === "function") {
           if (!document.pictureInPictureElement) {
             video.requestPictureInPicture().then(() => {
@@ -4544,33 +4365,13 @@
         }
       };
       // CUSTOM[PERFORMANCE] 반복 재생은 클릭/loadedmetadata로 반영하고 1초 상시 타이머를 사용하지 않는다.
-      let videoLoopSate = StorageUtil.getValue(StorageUtil.keys.youtube.videoLoop, false);
-      const videoLoopEvent = () => {
-        const videoFull = document.querySelector("#movie_player > div.html5-video-container > video");
-        if (videoFull) {
-          videoFull.loop = videoLoopSate;
-        }
+      const videoLoop = (event) => {
+        this.loopEnabled = !this.loopEnabled;
+        event.currentTarget.replaceChildren(this.loopEnabled ? this.genrateLoopSvg() : this.genrateNotLoopSvg());
+        StorageUtil.setValue(StorageUtil.keys.youtube.videoLoop, this.loopEnabled);
+        const video = player.querySelector("video");
+        if (video) video.loop = this.loopEnabled;
       };
-      document.addEventListener("loadedmetadata", (event) => {
-        if (event.target instanceof HTMLVideoElement && event.target.closest("#movie_player")) {
-          event.target.loop = videoLoopSate;
-        }
-      }, true);
-      const videoLoop = () => {
-        const target = document.querySelector("#" + loopElementId);
-        let svg = null;
-        if (videoLoopSate) {
-          videoLoopSate = false;
-          svg = this.genrateNotLoopSvg();
-        } else {
-          videoLoopSate = true;
-          svg = this.genrateLoopSvg();
-        }
-        target.replaceChildren(svg);
-        StorageUtil.setValue(StorageUtil.keys.youtube.videoLoop, videoLoopSate);
-        videoLoopEvent();
-      };
-      videoLoopEvent();
       const btns = [
         {
           "tagName": "div",
@@ -4604,9 +4405,8 @@
           "tagName": "div",
           "title": "Loop",
           "classname": "toolbox_extension_tool_btn",
-          "id": loopElementId,
           "onclick": videoLoop,
-          "icon": videoLoopSate ? this.genrateLoopSvg() : this.genrateNotLoopSvg()
+          "icon": this.loopEnabled ? this.genrateLoopSvg() : this.genrateNotLoopSvg()
         }
       ];
       for (let i = 0; i < btns.length; i++) {
@@ -4617,15 +4417,9 @@
         if (item.hasOwnProperty("icon")) {
           element.appendChild(item.icon);
         }
-        if (item.hasOwnProperty("id")) {
-          element.id = item.id;
-        }
-        if (item.hasOwnProperty("onclick")) {
-          element.onclick = item.onclick;
-        }
-        if (item.hasOwnProperty("style")) {
-          element.setAttribute("style", item.style);
-        }
+        element.addEventListener("click", event => {
+          if (event.isTrusted) item.onclick(event);
+        });
         parent.appendChild(element);
       }
     },
@@ -4635,77 +4429,33 @@
       toolBoxContainer.className = "toolbox_extension_container";
       const tools = document.createElement("div");
       tools.className = "toolbox_extension_tools";
-      this.genrateTools(tools);
+      this.genrateTools(tools, player);
       toolBoxContainer.appendChild(tools);
       player.appendChild(toolBoxContainer);
-      let isHovering = false;
-      button.addEventListener("mouseenter", () => {
-        toolBoxContainer.style.display = "block";
-        var containerRect = player.getBoundingClientRect();
-        var buttonRect = button.getBoundingClientRect();
-        var toolBoxContainerRect = toolBoxContainer.getBoundingClientRect();
-        var left = buttonRect.left - containerRect.left - toolBoxContainerRect.width / 2 + buttonRect.width / 2;
-        var top = buttonRect.top - containerRect.top - toolBoxContainer.clientHeight;
-        toolBoxContainer.style.left = `${left}px`;
-        toolBoxContainer.style.top = `${top}px`;
-      });
-      button.addEventListener("mouseleave", () => {
-        isHovering = false;
-        setTimeout(() => {
-          if (!isHovering) {
-            toolBoxContainer.style.display = "none";
-          }
-        }, 100);
-      });
-      toolBoxContainer.addEventListener("mouseenter", () => {
-        isHovering = true;
-      });
-      toolBoxContainer.addEventListener("mouseleave", () => {
-        isHovering = false;
-        toolBoxContainer.style.display = "none";
-      });
+      commonUtil.bindHoverMenu(button, toolBoxContainer, player);
     },
-    genrateBox: function() {
-      return new Promise((resolve) => {
-        const buttonId = "toolBox_extension_codehemu_x";
-        const boxContainer = document.createElement("div");
-        boxContainer.className = "ytp-button";
-        boxContainer.id = buttonId;
-        boxContainer.setAttribute("style", `position: relative;display: inline-block;width: 48px;height: 100%;`);
-        const boxInner = document.createElement("div");
-        boxInner.setAttribute("style", `position: absolute;width: 100%;height: 100%;	`);
-        const boxActiveButton = document.createElement("button");
-        boxActiveButton.setAttribute("style", `background-color: transparent;width: 100%;height: 100%;outline: none;flex: 1 1 0%;display: flex;-webkit-box-align: center;align-items: center;-webkit-box-pack: center;justify-content: center;border: none;padding: 0px;cursor: pointer;`);
-        boxContainer.appendChild(boxInner);
-        boxInner.appendChild(boxActiveButton);
-        boxActiveButton.appendChild(this.genrateToolSvg());
-        const genrateHtml = () => {
-          const player = document.querySelector("#player-container-outer .html5-video-player");
-          if (player) {
-            const rightControls = player.querySelector(".ytp-right-controls");
-            if (rightControls) {
-              rightControls.prepend(boxContainer);
-              this.genrateBoxContainer(boxContainer, player);
-            }
-          }
-        };
-        const interval = setInterval(() => {
-          if (!document.querySelector("#" + buttonId)) {
-            genrateHtml();
-          } else {
-            resolve();
-            clearInterval(interval);
-          }
-        }, 500);
-      });
+    mount: function(player, controls) {
+      const buttonId = "toolBox_extension_codehemu_x";
+      if (controls.querySelector("#" + buttonId)) return;
+      player.querySelector("#toolbox_extension_container")?.remove();
+      const boxContainer = document.createElement("div");
+      boxContainer.className = "ytp-button";
+      boxContainer.id = buttonId;
+      boxContainer.setAttribute("style", `position: relative;display: inline-block;width: 48px;height: 100%;`);
+      const boxInner = document.createElement("div");
+      boxInner.setAttribute("style", `position: absolute;width: 100%;height: 100%;	`);
+      const boxActiveButton = document.createElement("button");
+      boxActiveButton.setAttribute("style", `background-color: transparent;width: 100%;height: 100%;outline: none;flex: 1 1 0%;display: flex;-webkit-box-align: center;align-items: center;-webkit-box-pack: center;justify-content: center;border: none;padding: 0px;cursor: pointer;`);
+      boxContainer.appendChild(boxInner);
+      boxInner.appendChild(boxActiveButton);
+      boxActiveButton.appendChild(this.genrateToolSvg());
+      controls.prepend(boxContainer);
+      this.genrateBoxContainer(boxContainer, player);
+      const video = player.querySelector("video");
+      if (video) video.loop = this.loopEnabled;
     },
     showSettingDialog: function() {
-      const functionState = StorageUtil.getValue(StorageUtil.keys.youtube.functionState, {
-        isOpenCommentTable: true,
-        isOpenThemeProgressBar: true,
-        isOpenSpeedControl: true,
-        isOpenMarkOrRemoveAd: true
-      });
+      const functionState = StorageUtil.getFunctionState();
       const language = LangueUtil.getLanguage();
       // CUSTOM[FRAMEGEN-SETTINGS] 자동 켜기와 대기 시간은 함께 저장하며, 기존 설정처럼 창을 닫을 때 적용한다.
       const framegenSettings = StorageUtil.getFramegenSettings();
@@ -4881,56 +4631,68 @@
         styleSheet,
         direction: language.direction,
         onContentReady: function($that) {
-          const commentTable = $that.dialogContent.querySelector("#isCommentTableOpen");
-          const themeProgressBar = $that.dialogContent.querySelector("#isThemeProgressBarOpen");
-          const speedControl = $that.dialogContent.querySelector("#isSpeedControlOpen");
-          const markOrRemoveAd = $that.dialogContent.querySelector("#isMarkOrRemoveAdOpen");
-          const blockHomeMiniplayer = $that.dialogContent.querySelector("#blockHomeMiniplayer");
+          // CUSTOM[SETTINGS] 페이지 코드가 만든 클릭이나 변경 이벤트로 저장된 설정을 바꾸지 않는다.
+          const form = $that.dialogContent;
+          form.addEventListener("click", event => {
+            if (!event.isTrusted) event.preventDefault();
+          }, true);
+          const blockHomeMiniplayer = form.querySelector("#blockHomeMiniplayer");
           blockHomeMiniplayer.checked = StorageUtil.getValue(StorageUtil.keys.youtube.blockHomeMiniplayer, true) !== false;
-          blockHomeMiniplayer.addEventListener("change", () => {
-            StorageUtil.setValue(StorageUtil.keys.youtube.blockHomeMiniplayer, blockHomeMiniplayer.checked);
-          });
-          const framegenAuto = $that.dialogContent.querySelector("#isFramegenAutoOpen");
-          const framegenDelay = $that.dialogContent.querySelector("#framegenDelaySeconds");
-          $that.dialogContent.querySelectorAll("[data-i18n]").forEach((element) => {
+          const framegenAuto = form.querySelector("#isFramegenAutoOpen");
+          const framegenDelay = form.querySelector("#framegenDelaySeconds");
+          form.querySelectorAll("[data-i18n]").forEach((element) => {
             const key = element.getAttribute("data-i18n");
             element.textContent = language.content[key] ?? LangueUtil.language.en.content[key];
           });
           framegenAuto.checked = framegenSettings.enabled;
           framegenDelay.value = framegenSettings.delaySeconds;
           framegenDelay.disabled = !framegenSettings.enabled;
-          framegenAuto.addEventListener("change", () => {
-            framegenSettings.enabled = framegenAuto.checked;
-            framegenDelay.disabled = !framegenSettings.enabled;
-            StorageUtil.setValue(StorageUtil.keys.youtube.framegenAuto, framegenSettings);
+          // A page's execCommand can emit trusted input/change on the focused editor
+          // without a user beforeinput. Commit only the last user-edited value.
+          let editingDelay = false;
+          let enteredDelay = framegenSettings.delaySeconds;
+          framegenDelay.addEventListener("beforeinput", event => {
+            editingDelay = event.isTrusted;
           });
-          framegenDelay.addEventListener("change", () => {
-            const seconds = framegenDelay.valueAsNumber;
-            if (Number.isFinite(seconds))
-              framegenSettings.delaySeconds = Math.max(0, Math.min(60, Math.round(seconds)));
-            framegenDelay.value = framegenSettings.delaySeconds;
-            StorageUtil.setValue(StorageUtil.keys.youtube.framegenAuto, framegenSettings);
+          framegenDelay.addEventListener("input", event => {
+            if (event.isTrusted && editingDelay) enteredDelay = framegenDelay.valueAsNumber;
+            editingDelay = false;
           });
-          $that.dialogContent.style.maxHeight = "min(560px, calc(100dvh - 100px))";
-          commentTable.checked = functionState.isOpenCommentTable;
-          themeProgressBar.checked = functionState.isOpenThemeProgressBar;
-          speedControl.checked = functionState.isOpenSpeedControl;
-          markOrRemoveAd.checked = functionState.isOpenMarkOrRemoveAd;
-          commentTable.addEventListener("change", (e) => {
-            functionState.isOpenCommentTable = e.target.checked;
-            StorageUtil.setValue(StorageUtil.keys.youtube.functionState, functionState);
-          });
-          themeProgressBar.addEventListener("change", (e) => {
-            functionState.isOpenThemeProgressBar = e.target.checked;
-            StorageUtil.setValue(StorageUtil.keys.youtube.functionState, functionState);
-          });
-          speedControl.addEventListener("change", (e) => {
-            functionState.isOpenSpeedControl = e.target.checked;
-            StorageUtil.setValue(StorageUtil.keys.youtube.functionState, functionState);
-          });
-          markOrRemoveAd.addEventListener("change", (e) => {
-            functionState.isOpenMarkOrRemoveAd = e.target.checked;
-            StorageUtil.setValue(StorageUtil.keys.youtube.functionState, functionState);
+          form.style.maxHeight = "min(560px, calc(100dvh - 100px))";
+          const featureKeys = new Map();
+          for (const [id, key] of [
+            ["isCommentTableOpen", "isOpenCommentTable"],
+            ["isThemeProgressBarOpen", "isOpenThemeProgressBar"],
+            ["isSpeedControlOpen", "isOpenSpeedControl"],
+            ["isMarkOrRemoveAdOpen", "isOpenMarkOrRemoveAd"]
+          ]) {
+            const input = form.querySelector("#" + id);
+            input.checked = functionState[key];
+            featureKeys.set(input, key);
+          }
+          form.addEventListener("change", event => {
+            if (!event.isTrusted || !form.isConnected || form.getRootNode() !== $that.root) return;
+            const input = event.target;
+            if (input === blockHomeMiniplayer) {
+              StorageUtil.setValue(StorageUtil.keys.youtube.blockHomeMiniplayer, input.checked);
+            } else if (input === framegenAuto) {
+              framegenSettings.enabled = input.checked;
+              framegenDelay.disabled = !input.checked;
+              StorageUtil.setValue(StorageUtil.keys.youtube.framegenAuto, framegenSettings);
+            } else if (input === framegenDelay) {
+              if (Number.isFinite(enteredDelay)) {
+                const seconds = Math.max(0, Math.min(60, Math.round(enteredDelay)));
+                if (seconds !== framegenSettings.delaySeconds) {
+                  framegenSettings.delaySeconds = seconds;
+                  StorageUtil.setValue(StorageUtil.keys.youtube.framegenAuto, framegenSettings);
+                }
+              }
+              input.value = framegenSettings.delaySeconds;
+              enteredDelay = framegenSettings.delaySeconds;
+            } else if (featureKeys.has(input)) {
+              functionState[featureKeys.get(input)] = input.checked;
+              StorageUtil.setValue(StorageUtil.keys.youtube.functionState, functionState);
+            }
           });
         },
         onClose: function() {
@@ -4938,27 +4700,56 @@
         }
       });
     },
-    run: function() {
-      return new Promise((resolve) => {
-        if (/youtube\.com/.test(window.location.host)) {
-          GM_registerMenuCommand("Setting", () => {
-            this.showSettingDialog();
-          });
-          commonUtil.onPageLoad(async () => {
-            const theme = StorageUtil.getValue(StorageUtil.keys.youtube.theme, null);
-            if (theme) {
-              Theme.setTheme(theme, false);
-            }
-            this.insertStyle();
-            await this.genrateBox();
-            resolve();
-          });
-        } else {
-          resolve();
-        }
-      });
+    start: function() {
+      GM_registerMenuCommand("Setting", () => this.showSettingDialog());
+      const theme = StorageUtil.getValue(StorageUtil.keys.youtube.theme, null);
+      if (theme) Theme.setTheme(theme, false);
+      this.loopEnabled = StorageUtil.getValue(StorageUtil.keys.youtube.videoLoop, false);
+      this.insertStyle();
     }
   };
+
+  // CUSTOM[PLAYER-TOOLS] 도구상자와 배속 버튼은 같은 플레이어를 기다린다. 홈에서는 반복 조회하지 않는다.
+  function startPlayerTools(speedEnabled) {
+    ToolBox.start();
+    if (speedEnabled) SpeedControl.start();
+    const selector = "#player-container-outer .html5-video-player .ytp-right-controls";
+    let observer = null;
+    let timeout;
+    const stop = () => {
+      observer?.disconnect();
+      observer = null;
+      clearTimeout(timeout);
+    };
+    const mount = () => {
+      const controls = document.querySelector(selector);
+      if (!controls) return false;
+      stop();
+      const player = controls.closest(".html5-video-player");
+      ToolBox.mount(player, controls);
+      if (speedEnabled) SpeedControl.mount(player, controls);
+      return true;
+    };
+    const sync = () => {
+      if (mount() || observer || !/^\/(?:watch|live|clip)(?:\/|$)/.test(location.pathname)) return;
+      observer = new MutationObserver(mount);
+      observer.observe(document, { childList: true, subtree: true });
+      timeout = setTimeout(stop, 10000);
+    };
+    document.addEventListener("loadedmetadata", event => {
+      const video = event.target;
+      if (!(video instanceof HTMLVideoElement) || !video.closest("#movie_player")) return;
+      sync();
+      video.loop = ToolBox.loopEnabled;
+      if (speedEnabled) SpeedControl.setVideoRate(SpeedControl.currentSpeed, video);
+    }, true);
+    document.addEventListener("yt-player-updated", sync);
+    document.addEventListener("yt-navigate-start", stop);
+    document.addEventListener("yt-navigate-finish", sync);
+    window.addEventListener("pagehide", stop);
+    window.addEventListener("pageshow", sync);
+    sync();
+  }
 
   // CUSTOM[HOME-MINIPLAYER-BEGIN] 홈에서만 자동 미니플레이어를 가리고, 전용 닫기 버튼으로 재생까지 종료한다.
   // CUSTOM[HOME-MINIPLAYER-BEGIN] 기본 ON이며 설정 OFF면 감시하지 않는다. 초기 탐색 후 네이티브 플레이어 영역만 감시한다.
@@ -4967,6 +4758,7 @@
       return;
     const attribute = "data-youtub-block-home-miniplayer";
     let observer = null;
+    let stateObserver = null;
     let timer = null;
     let style = null;
     let clickedButtons = new WeakSet();
@@ -4974,6 +4766,8 @@
     const stop = () => {
       observer?.disconnect();
       observer = null;
+      stateObserver?.disconnect();
+      stateObserver = null;
       watchedTargets = [];
       clearTimeout(timer);
       timer = null;
@@ -5001,18 +4795,30 @@
     const observeNativePlayer = () => {
       if (location.pathname !== "/")
         return;
-      const targets = [document.querySelector("ytd-miniplayer"), document.querySelector("#movie_player")].filter(Boolean);
+      const miniplayer = document.querySelector("ytd-miniplayer");
+      const player = document.querySelector("#movie_player");
+      const targets = [miniplayer, player].filter(Boolean);
+      const nestedPlayer = miniplayer?.querySelector("#movie_player");
+      if (nestedPlayer && nestedPlayer !== player)
+        targets.push(nestedPlayer);
       if (targets.length && (targets.length !== watchedTargets.length || targets.some((target, index) => target !== watchedTargets[index]))) {
         observer.disconnect();
+        stateObserver.disconnect();
         watchedTargets = targets;
-        for (const target of targets)
-          observer.observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "active", "hidden"] });
+        for (const target of targets) {
+          observer.observe(target, { childList: true, subtree: true });
+          stateObserver.observe(target, { attributes: true, attributeFilter: ["class", "active", "hidden"] });
+        }
         clearTimeout(timer);
         timer = null;
       }
       closeMiniplayer();
     };
     const sync = () => {
+      if (location.pathname === "/" && observer) {
+        observeNativePlayer();
+        return;
+      }
       stop();
       clickedButtons = new WeakSet();
       const root = document.documentElement;
@@ -5028,13 +4834,17 @@
         (document.head || root).appendChild(style);
       }
       observer = new MutationObserver(observeNativePlayer);
-      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "active", "hidden"] });
+      stateObserver = new MutationObserver(observeNativePlayer);
+      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["id"] });
       timer = setTimeout(stop, 15000);
       observeNativePlayer();
     };
     document.addEventListener("playing", (event) => {
-      if (location.pathname === "/" && event.target.matches?.("ytd-miniplayer #movie_player video, #movie_player.ytp-player-minimized video"))
+      if (location.pathname === "/" && event.target.matches?.("ytd-miniplayer #movie_player video, #movie_player.ytp-player-minimized video")) {
+        // 같은 버튼을 재사용한 미니플레이어도 새로 재생되면 닫을 수 있다.
+        clickedButtons = new WeakSet();
         sync();
+      }
     }, true);
     document.addEventListener("yt-navigate-start", sync);
     document.addEventListener("yt-navigate-finish", sync);
@@ -5048,6 +4858,24 @@
   }
   startBlockHomeMiniplayer();
   // CUSTOM[HOME-MINIPLAYER-END] 일반 영상 페이지·홈 미리보기·브라우저 PiP에는 적용하지 않는다.
+
+  function currentWatchVideoId() {
+    return location.pathname === "/watch" ? new URLSearchParams(location.search).get("v") || "" : "";
+  }
+
+  function findVisibleWatchPage(videoId) {
+    for (const page of document.querySelectorAll("ytd-watch-flexy")) {
+      if (page.getAttribute("video-id") === videoId && !page.closest("[hidden]"))
+        return page;
+    }
+    return null;
+  }
+
+  // CUSTOM[PERFORMANCE] 처음 1초는 빠르게 확인하고, 없는 컨트롤은 종료 시각까지 초당 한 번만 찾는다.
+  function controlRetryDelay(deadline, windowMs) {
+    const remaining = deadline - Date.now();
+    return Math.max(0, Math.min(remaining, remaining > windowMs - 1000 ? 250 : 1000));
+  }
 
   // CUSTOM[FRAMEGEN-BEGIN] Framegen 1.4.7의 실제 페이지 버튼을 사용해 설정한 대기 시간(기본 3초) 뒤 한 번 켠다.
   // CUSTOM[FRAMEGEN-BEGIN] 숨겨진 컨트롤도 클릭 가능하다. 이미 ON이거나 수동으로 조작한 영상은 다시 토글하지 않는다.
@@ -5065,7 +4893,10 @@
     let handled = false;
     let navigating = false;
     let videoDeadline = 0;
-    const currentKey = () => location.pathname === "/watch" && new URL(location.href).searchParams.get("v") || /^\/shorts\/[^/]+/.test(location.pathname) ? location.href : "";
+    const currentKey = () => {
+      const videoId = currentWatchVideoId();
+      return videoId ? "/watch/" + videoId : location.pathname.match(/^\/shorts\/[^/]+/)?.[0] || "";
+    };
     const cancel = () => {
       clearTimeout(timer);
       timer = null;
@@ -5073,8 +4904,7 @@
     const playingVideo = () => {
       let videos;
       if (location.pathname === "/watch") {
-        const id = new URL(location.href).searchParams.get("v");
-        const flexy = Array.from(document.querySelectorAll("ytd-watch-flexy")).find((element) => element.getAttribute("video-id") === id && !element.closest("[hidden]"));
+        const flexy = findVisibleWatchPage(currentWatchVideoId());
         videos = flexy ? flexy.querySelectorAll("#movie_player video") : [];
       } else {
         videos = document.querySelectorAll("video");
@@ -5119,16 +4949,19 @@
           timer = setTimeout(() => {
             timer = null;
             schedule();
-          }, 250);
+          }, controlRetryDelay(videoDeadline, 15000));
         return;
       }
       const expectedVideo = video;
       const deadline = Date.now() + delayMs + 15000;
       const step = () => {
         timer = null;
-        if (navigating || currentKey() !== key || handled || playingVideo() !== expectedVideo)
+        if (navigating || currentKey() !== key || handled || !expectedVideo.isConnected || expectedVideo.paused || expectedVideo.ended)
           return;
         const button = document.querySelector(buttonSelector);
+        // 버튼이 없는 각 재시도에서는 화면에 보이는 영상 면적을 계산할 필요가 없다.
+        if ((button || Date.now() >= deadline) && playingVideo() !== expectedVideo)
+          return;
         if (button && (button.getAttribute("aria-pressed") === "true" || button.getAttribute("data-active") === "true")) {
           handled = true;
           return;
@@ -5139,7 +4972,7 @@
           return;
         }
         if (Date.now() < deadline)
-          timer = setTimeout(step, 250);
+          timer = setTimeout(step, controlRetryDelay(deadline, 15000));
         else
           handled = true;
       };
@@ -5154,6 +4987,7 @@
     }
     document.addEventListener("click", (event) => {
       if (event.target instanceof Element && event.target.closest(buttonSelector)) {
+        pageKey = currentKey();
         handled = true;
         cancel();
       }
@@ -5184,13 +5018,20 @@
     let timer = null;
     let pageVideoId = "";
     let finished = false;
-    const currentVideoId = () => location.pathname === "/watch" ? new URL(location.href).searchParams.get("v") || "" : "";
+    let openedSettings = null;
+    const restoreMenu = () => {
+      const settings = openedSettings;
+      openedSettings = null;
+      if (settings?.isConnected && settings.getAttribute("aria-expanded") !== "false")
+        settings.click();
+    };
     const cancel = () => {
       clearTimeout(timer);
       timer = null;
+      restoreMenu();
     };
     const schedule = () => {
-      const videoId = currentVideoId();
+      const videoId = currentWatchVideoId();
       if (videoId !== pageVideoId) {
         cancel();
         pageVideoId = videoId;
@@ -5199,31 +5040,48 @@
       if (!videoId || finished || timer !== null)
         return;
       const deadline = Date.now() + 15000;
+      let populatedMenu = null;
       const step = () => {
         timer = null;
-        if (currentVideoId() !== videoId || finished)
+        if (currentWatchVideoId() !== videoId || finished) {
+          restoreMenu();
           return;
-        const flexy = Array.from(document.querySelectorAll("ytd-watch-flexy")).find((element) => element.getAttribute("video-id") === videoId && !element.closest("[hidden]"));
-        const player = flexy && !flexy.closest("[hidden]") && flexy.querySelector("#movie_player");
-        const settings = player && player.querySelector(".ytp-settings-button");
+        }
+        const player = findVisibleWatchPage(videoId)?.querySelector("#movie_player");
+        const settings = player?.querySelector(".ytp-settings-button");
+        if (openedSettings && settings !== openedSettings)
+          restoreMenu();
         if (settings && !settings.disabled && settings.getClientRects().length > 0) {
-          const wasOpen = settings.getAttribute("aria-expanded") === "true";
-          try {
-            if (!wasOpen)
-              settings.click();
-            const ambient = Array.from(player.querySelectorAll('[role="menuitemcheckbox"]')).find((item) => /^(영화 조명|Ambient mode)$/i.test(item.getAttribute("aria-label") || item.textContent.trim()));
-            if (ambient) {
-              if (ambient.getAttribute("aria-checked") === "true")
-                ambient.click();
-              finished = ambient.getAttribute("aria-checked") === "false";
-            }
-          } finally {
-            if (!wasOpen)
-              settings.click();
+          const expanded = settings.getAttribute("aria-expanded");
+          if (expanded === "false" && openedSettings === settings) {
+            // 사용자가 먼저 닫았으면 이번 영상에서는 다시 열지 않는다.
+            openedSettings = null;
+            finished = true;
+            return;
+          }
+          if (expanded !== "true" && !openedSettings) {
+            openedSettings = settings;
+            settings.click();
+          }
+          const items = player.querySelectorAll('[role="menuitemcheckbox"]');
+          const ambient = Array.from(items).find((item) => /^(영화 조명|Ambient mode)$/i.test(item.getAttribute("aria-label") || item.textContent.trim()));
+          if (ambient) {
+            const checked = ambient.getAttribute("aria-checked");
+            if (checked === "true")
+              ambient.click();
+            finished = checked === "true" || checked === "false";
+          } else if (player.querySelector('.ytp-panel-menu [role^="menuitem"]')) {
+            // 다른 항목보다 늦게 붙는 조명 버튼을 한 번 더 확인한다.
+            finished = populatedMenu === settings;
+            populatedMenu = settings;
           }
         }
         if (!finished && Date.now() < deadline)
           timer = setTimeout(step, 500);
+        else {
+          finished = true;
+          restoreMenu();
+        }
       };
       timer = setTimeout(step, 500);
     };
@@ -5249,7 +5107,6 @@
     let generation = 0;
     let pageVideoId = "";
     let finished = false;
-    const currentVideoId = () => location.pathname === "/watch" ? new URL(location.href).searchParams.get("v") || "" : "";
     const cancel = () => {
       generation++;
       clearTimeout(timer);
@@ -5257,7 +5114,7 @@
     };
     const clickable = (button) => button && !button.disabled && button.getAttribute("aria-disabled") !== "true" && button.getAttribute("data-disabled") !== "true" && !button.closest('[hidden], [aria-hidden="true"], [inert]') && button.getClientRects().length > 0 && getComputedStyle(button).visibility === "visible";
     const schedule = () => {
-      const videoId = currentVideoId();
+      const videoId = currentWatchVideoId();
       if (videoId !== pageVideoId) {
         cancel();
         pageVideoId = videoId;
@@ -5271,9 +5128,9 @@
         let deadline = Date.now() + 10000;
         const step = () => {
           timer = null;
-          if (run !== generation || currentVideoId() !== videoId || finished)
+          if (run !== generation || currentWatchVideoId() !== videoId || finished)
             return;
-          const flexy = Array.from(document.querySelectorAll("ytd-watch-flexy")).find((element) => element.getAttribute("video-id") === videoId && !element.closest("[hidden]"));
+          const flexy = findVisibleWatchPage(videoId);
           const panel = flexy && flexy.querySelector(panelSelector);
           const summaryButton = panel && Array.from(panel.querySelectorAll("button")).find((button) => button.textContent.replace(/\s/g, "") === summaryText && clickable(button));
           if (summaryButton) {
@@ -5283,7 +5140,7 @@
           }
           if (!asked && !panel && flexy) {
             const askButton = Array.from(flexy.querySelectorAll('ytd-watch-metadata button[aria-label="질문하기"]')).find(clickable);
-            if (clickable(askButton)) {
+            if (askButton) {
               asked = true;
               deadline = Date.now() + 10000;
               askButton.click();
@@ -5293,7 +5150,7 @@
             finished = true;
             return;
           }
-          timer = setTimeout(step, 250);
+          timer = setTimeout(step, controlRetryDelay(deadline, 10000));
         };
         step();
       }, 3000);
@@ -5323,7 +5180,7 @@
     isOpenThemeProgressBar,
     isOpenSpeedControl,
     isOpenMarkOrRemoveAd
-  } = StorageUtil.getValue(StorageUtil.keys.youtube.functionState, StorageUtil.getDefaultFunctionState());
+  } = StorageUtil.getFunctionState();
   // CUSTOM[ADGUARD] 전역 passthrough/default 정책 대신 AdGuard의 스크립트 정책을 사용한다.
   const createTrustedScript = (source) => {
     if (typeof ADG_policyApi !== "undefined" && ADG_policyApi.isSupported) {
@@ -5339,13 +5196,15 @@
       return;
     }
     const communicationKey = `ck-${Date.now()}-${Math.floor(Math.random() * 314159265359 + 314159265359).toString(36)}`;
-    const Promise = (async () => {
-    })().constructor;
     if (!document.documentElement) {
-      await Promise.resolve(0);
-      while (!document.documentElement) {
-        await new Promise((resolve) => nextBrowserTick(resolve)).then().catch(console.warn);
-      }
+      await new Promise(resolve => {
+        const observer = new MutationObserver(() => {
+          if (!document.documentElement) return;
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(document, { childList: true });
+      });
     }
     const sourceURL = "debug://tabview-youtube/tabview.execution.js";
     const textContent = `(${executionScript})("${communicationKey}");${"\n\n"}//# sourceURL=${sourceURL}${"\n"}`;
@@ -5356,17 +5215,8 @@
     style.textContent = `${styles["main"].trim()}${"\n\n"}/*# sourceURL=${sourceURLMainCSS} */${"\n"}`;
     document.documentElement.appendChild(style);
   })();
-  (async () => {
-    if (isOpenThemeProgressBar) {
-      ThemeProgressbar.start();
-    }
-    await ToolBox.run();
-    if (isOpenSpeedControl) {
-      await SpeedControl.run();
-    }
-    if (isOpenMarkOrRemoveAd) {
-      MarkOrRemoveAd.run();
-    }
-  })();
+  if (isOpenThemeProgressBar) ThemeProgressbar.start();
+  if (isOpenMarkOrRemoveAd) MarkOrRemoveAd.run();
+  commonUtil.onPageLoad(() => startPlayerTools(isOpenSpeedControl));
 
 }());
