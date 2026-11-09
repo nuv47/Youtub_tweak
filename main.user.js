@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.13
+// @version     1.1.5.14
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -5012,87 +5012,97 @@
   startAutoFramegen();
   // CUSTOM[FRAMEGEN-END] 위 함수와 시작 호출을 함께 유지한다. Framegen의 화질·FPS 설정은 변경하지 않는다.
 
-  // CUSTOM[AMBIENT-BEGIN] 영상 진입/전환마다 켜진 영화 조명만 OFF. 처음 닫혀 있던 메뉴는 다시 닫는다.
-  // CUSTOM[AMBIENT-BEGIN] 처리 후 수동 변경은 유지하며 버튼 대기는 최대 15초. 아래 시작 호출도 함께 유지한다.
+  // CUSTOM[PLAYBACK] 영상 면과 Space의 실제 입력은 기본 video API로 한 번만 처리한다.
+  // CUSTOM[PLAYBACK] 설정·입력창·버튼은 네이티브 동작을 유지하고 Framegen 캔버스도 영상 면으로 취급한다.
+  function startPlaybackControls() {
+    let handledSpace = false;
+    const interactive = 'input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="button"], [role="slider"], [role^="menuitem"], [role="dialog"], dialog, .dialog-gcc-mask, .fc-controls-root, .ytp-chrome-bottom, .ytp-settings-menu';
+    const hasInteractiveTarget = (event) => event.composedPath().some(node => node instanceof Element && node.matches(interactive));
+    const currentPlayer = () => {
+      const videoId = currentWatchVideoId();
+      return videoId ? findVisibleWatchPage(videoId)?.querySelector('#movie_player') : null;
+    };
+    const toggle = (event, player) => {
+      const video = player?.querySelector('video.html5-main-video, video');
+      if (!video || video.readyState < 2 || video.controls)
+        return false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (video.paused)
+        video.play().catch(console.warn);
+      else
+        video.pause();
+      return true;
+    };
+    window.addEventListener('keydown', (event) => {
+      if (!event.isTrusted || event.defaultPrevented || event.key !== ' ' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing)
+        return;
+      if (!(event.target instanceof Element) || hasInteractiveTarget(event))
+        return;
+      if (event.repeat) {
+        if (handledSpace) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+        return;
+      }
+      handledSpace = toggle(event, currentPlayer());
+    }, true);
+    window.addEventListener('keyup', (event) => {
+      if (event.isTrusted && event.key === ' ' && handledSpace) {
+        handledSpace = false;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
+    window.addEventListener('click', (event) => {
+      if (!event.isTrusted || event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+        return;
+      const target = event.target;
+      if (!(target instanceof Element) || hasInteractiveTarget(event) || !target.matches('video, canvas, .html5-video-container, #movie_player'))
+        return;
+      const player = currentPlayer();
+      if (player?.contains(target) && toggle(event, player))
+        player.focus({ preventScroll: true });
+    }, true);
+    window.addEventListener('blur', () => { handledSpace = false; });
+    document.addEventListener('yt-navigate-start', () => { handledSpace = false; });
+  }
+  startPlaybackControls();
+
+  // CUSTOM[AMBIENT-BEGIN] 설정 메뉴를 열거나 저장값을 건드리지 않고 영화 조명 레이어만 기본 숨김 처리한다.
+  // CUSTOM[AMBIENT-BEGIN] 사용자가 영화 조명 메뉴를 직접 조작하면 해당 영상에서는 숨김을 해제한다.
   function startDefaultAmbientOff() {
-    let timer = null;
+    const attribute = 'data-youtub-ambient-off';
     let pageVideoId = "";
-    let finished = false;
-    let openedSettings = null;
-    const restoreMenu = () => {
-      const settings = openedSettings;
-      openedSettings = null;
-      if (settings?.isConnected && settings.getAttribute("aria-expanded") !== "false")
-        settings.click();
-    };
-    const cancel = () => {
-      clearTimeout(timer);
-      timer = null;
-      restoreMenu();
-    };
-    const schedule = () => {
+    let manual = false;
+    GM_addStyle(`html[${attribute}] ytd-watch-flexy #cinematics { display: none !important; }`);
+    const sync = () => {
       const videoId = currentWatchVideoId();
       if (videoId !== pageVideoId) {
-        cancel();
         pageVideoId = videoId;
-        finished = false;
+        manual = false;
       }
-      if (!videoId || finished || timer !== null)
-        return;
-      const deadline = Date.now() + 15000;
-      let populatedMenu = null;
-      const step = () => {
-        timer = null;
-        if (currentWatchVideoId() !== videoId || finished) {
-          restoreMenu();
-          return;
-        }
-        const player = findVisibleWatchPage(videoId)?.querySelector("#movie_player");
-        const settings = player?.querySelector(".ytp-settings-button");
-        if (openedSettings && settings !== openedSettings)
-          restoreMenu();
-        if (settings && !settings.disabled && settings.getClientRects().length > 0) {
-          const expanded = settings.getAttribute("aria-expanded");
-          if (expanded === "false" && openedSettings === settings) {
-            // 사용자가 먼저 닫았으면 이번 영상에서는 다시 열지 않는다.
-            openedSettings = null;
-            finished = true;
-            return;
-          }
-          if (expanded !== "true" && !openedSettings) {
-            openedSettings = settings;
-            settings.click();
-          }
-          const items = player.querySelectorAll('[role="menuitemcheckbox"]');
-          const ambient = Array.from(items).find((item) => /^(영화 조명|Ambient mode)$/i.test(item.getAttribute("aria-label") || item.textContent.trim()));
-          if (ambient) {
-            const checked = ambient.getAttribute("aria-checked");
-            if (checked === "true")
-              ambient.click();
-            finished = checked === "true" || checked === "false";
-          } else if (player.querySelector('.ytp-panel-menu [role^="menuitem"]')) {
-            // 다른 항목보다 늦게 붙는 조명 버튼을 한 번 더 확인한다.
-            finished = populatedMenu === settings;
-            populatedMenu = settings;
-          }
-        }
-        if (!finished && Date.now() < deadline)
-          timer = setTimeout(step, 500);
-        else {
-          finished = true;
-          restoreMenu();
-        }
-      };
-      timer = setTimeout(step, 500);
+      document.documentElement?.toggleAttribute(attribute, !!videoId && !manual);
     };
-    document.addEventListener("yt-navigate-start", cancel);
-    document.addEventListener("yt-navigate-finish", schedule);
-    window.addEventListener("pagehide", cancel);
-    window.addEventListener("pageshow", schedule);
-    if (document.readyState === "complete")
-      schedule();
+    document.addEventListener('click', (event) => {
+      if (!event.isTrusted || !(event.target instanceof Element))
+        return;
+      const item = event.target.closest('[role="menuitemcheckbox"]');
+      if (!item || !findVisibleWatchPage(currentWatchVideoId())?.querySelector('#movie_player')?.contains(item))
+        return;
+      if (/^(영화 조명|Ambient mode)$/i.test(item.getAttribute('aria-label') || item.textContent.trim())) {
+        pageVideoId = currentWatchVideoId();
+        manual = true;
+        sync();
+      }
+    }, true);
+    document.addEventListener('yt-navigate-finish', sync);
+    window.addEventListener('pageshow', sync);
+    if (document.documentElement)
+      sync();
     else
-      window.addEventListener("load", schedule, { once: true });
+      document.addEventListener('DOMContentLoaded', sync, { once: true });
   }
 
   // CUSTOM[AMBIENT-END] 시작 호출까지 개조 범위이며 댓글 레이아웃 설정과 독립적으로 실행한다.

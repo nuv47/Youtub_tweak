@@ -17,7 +17,12 @@ async function fixture(t, body, pathname = '/watch?v=first') {
   await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
   await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
   await page.evaluate(() => {
-    window.GM_addStyle = window.GM_registerMenuCommand = window.GM_setValue = () => {};
+    window.GM_registerMenuCommand = window.GM_setValue = () => {};
+    window.GM_addStyle = css => {
+      const style = document.createElement('style');
+      style.textContent = css;
+      document.documentElement.append(style);
+    };
     window.GM_getValue = (key, fallback) => key === 'yt/functionState_01' ? {
       isOpenCommentTable: false, isOpenThemeProgressBar: false, isOpenSpeedControl: false, isOpenMarkOrRemoveAd: false
     } : fallback;
@@ -54,7 +59,7 @@ test('Framegen remembers a manual toggle across timestamp changes and enables th
   assert.equal(await page.locator('.fc-side').getAttribute('aria-pressed'), 'true');
 });
 
-test('missing optional controls have bounded query counts and an unsupported settings menu opens once', async t => {
+test('missing optional controls have bounded queries without opening settings', async t => {
   const page = await fixture(t, watch('<button class="ytp-settings-button" aria-expanded="false">Settings</button>'
     + '<div class="ytp-panel-menu"><div role="menuitem">Quality</div></div>'));
   await page.evaluate(() => {
@@ -83,7 +88,7 @@ test('missing optional controls have bounded query counts and an unsupported set
   await page.clock.runFor(18500);
   const counts = await page.evaluate(() => window.counts);
   t.diagnostic(JSON.stringify(counts));
-  assert.equal(counts.settings, 2);
+  assert.equal(counts.settings, 0);
   assert.ok(counts.framegen > 0 && counts.framegen <= 20);
   assert.ok(counts.ask > 0 && counts.ask <= 15);
   assert.ok(counts.videoBounds > 0 && counts.videoBounds <= 3);
@@ -92,7 +97,7 @@ test('missing optional controls have bounded query counts and an unsupported set
   assert.deepEqual(await page.evaluate(() => window.counts), counts);
 });
 
-test('delayed ambient and summary controls are each used once', async t => {
+test('delayed summary is requested once without opening settings or toggling ambient', async t => {
   const page = await fixture(t, watch('<button class="ytp-settings-button" aria-expanded="false">Settings</button>'
     + '<div class="ytp-panel-menu"><div role="menuitem">Quality</div></div><ytd-watch-metadata></ytd-watch-metadata>'));
   await page.evaluate(() => {
@@ -131,7 +136,43 @@ test('delayed ambient and summary controls are each used once', async t => {
   });
   await page.addScriptTag({ path: userscript });
   await page.clock.runFor(16000);
-  assert.deepEqual(await page.evaluate(() => window.counts), { settings: 2, ambient: 1, ask: 1, summary: 1 });
+  assert.deepEqual(await page.evaluate(() => window.counts), { settings: 0, ambient: 0, ask: 1, summary: 1 });
+});
+
+test('ambient is hidden without changing focus or saved settings and manual changes last for the video', async t => {
+  const page = await fixture(t, watch('<div id="cinematics">Ambient light</div>'
+    + '<button class="ytp-settings-button" aria-expanded="false">Settings</button>'
+    + '<button role="menuitemcheckbox" aria-checked="true">Ambient mode</button>'));
+  await page.evaluate(() => {
+    window.settingsClicks = 0;
+    window.savedSettings = [];
+    window.GM_setValue = (...args) => savedSettings.push(args);
+    const settings = document.querySelector('.ytp-settings-button');
+    settings.onclick = () => settingsClicks++;
+    settings.focus();
+    const ambient = document.querySelector('[role="menuitemcheckbox"]');
+    ambient.onclick = () => ambient.setAttribute('aria-checked', ambient.getAttribute('aria-checked') === 'false');
+  });
+  await page.addScriptTag({ path: userscript });
+  await page.clock.runFor(18000);
+  assert.equal(await page.locator('#cinematics').isVisible(), false);
+  assert.deepEqual(await page.evaluate(() => [settingsClicks, document.activeElement.className, savedSettings]), [0, 'ytp-settings-button', []]);
+  assert.equal(await page.getByRole('menuitemcheckbox').getAttribute('aria-checked'), 'true');
+  await page.getByRole('menuitemcheckbox').click();
+  assert.equal(await page.locator('#cinematics').isVisible(), true);
+  await page.evaluate(() => {
+    history.replaceState(null, '', '/watch?v=first&t=30');
+    document.dispatchEvent(new Event('yt-navigate-finish'));
+  });
+  assert.equal(await page.locator('#cinematics').isVisible(), true);
+  await page.evaluate(() => {
+    document.dispatchEvent(new Event('yt-navigate-start'));
+    history.pushState(null, '', '/watch?v=next');
+    document.querySelector('ytd-watch-flexy').setAttribute('video-id', 'next');
+    document.dispatchEvent(new Event('yt-navigate-finish'));
+  });
+  assert.equal(await page.locator('#cinematics').isVisible(), false);
+  assert.deepEqual(await page.evaluate(() => [settingsClicks, savedSettings]), [0, []]);
 });
 
 test('home player ignores class changes on its controls and reacts to a minimize transition', async t => {
