@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.15
+// @version     1.1.5.16
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -4871,6 +4871,16 @@
     return null;
   }
 
+  function currentWatchPlayer() {
+    const videoId = currentWatchVideoId();
+    return videoId ? findVisibleWatchPage(videoId)?.querySelector('#movie_player') : null;
+  }
+
+  function hasOpenPlayerMenu() {
+    return Array.from(document.querySelectorAll('.ytp-contextmenu, .ytp-settings-menu')).some(menu =>
+      menu.getClientRects().length && getComputedStyle(menu).visibility === 'visible');
+  }
+
   // CUSTOM[PERFORMANCE] 처음 1초는 빠르게 확인하고, 없는 컨트롤은 종료 시각까지 초당 한 번만 찾는다.
   function controlRetryDelay(deadline, windowMs) {
     const remaining = deadline - Date.now();
@@ -5012,26 +5022,172 @@
   startAutoFramegen();
   // CUSTOM[FRAMEGEN-END] 위 함수와 시작 호출을 함께 유지한다. Framegen의 화질·FPS 설정은 변경하지 않는다.
 
+  // CUSTOM[CONTROLS-IDLE] 포인터가 영상 위에 있어도 마지막 조작 1초 뒤 상·하단 컨트롤을 숨긴다.
+  // CUSTOM[CONTROLS-IDLE] 열린 메뉴·드래그·키보드로 선택한 컨트롤은 유지하며 탐색 때 타이머를 정리한다.
+  function startPlayerControlsAutoHide() {
+    const attribute = 'data-youtub-controls-hidden';
+    let player = null;
+    let timer = null;
+    let pointerHeld = false;
+    // 초기 임시 컨테이너에서 watch 화면으로 옮겨지기 전에도 표시 중인 컨트롤을 숨긴다.
+    const visiblePlayer = () => currentWatchVideoId()
+      ? Array.from(document.querySelectorAll('#movie_player')).find(p => !p.closest('[hidden]') && p.getClientRects().length) || null
+      : null;
+    GM_addStyle(`
+      #movie_player[${attribute}] .ytp-chrome-top,
+      #movie_player[${attribute}] .ytp-chrome-bottom,
+      #movie_player[${attribute}] .ytp-gradient-top,
+      #movie_player[${attribute}] .ytp-gradient-bottom {
+        opacity: 0 !important; pointer-events: none !important; transition: none !important;
+      }
+    `);
+    const reveal = (nextPlayer) => {
+      clearTimeout(timer);
+      timer = null;
+      if (player !== nextPlayer)
+        player?.removeAttribute(attribute);
+      player = nextPlayer;
+      if (!player?.isConnected)
+        return;
+      player.removeAttribute(attribute);
+      timer = setTimeout(() => {
+        timer = null;
+        if (player !== visiblePlayer() || pointerHeld || hasOpenPlayerMenu() ||
+            player.querySelector('.ytp-chrome-top :focus-visible, .ytp-chrome-bottom :focus-visible'))
+          return;
+        player.setAttribute(attribute, '');
+      }, 1000);
+    };
+    const activity = (event) => {
+      if (!event.isTrusted || !(event.target instanceof Element))
+        return false;
+      const nextPlayer = event.target.closest('#movie_player');
+      if (event.type === 'focusin' && event.target === nextPlayer)
+        return false;
+      if (nextPlayer && (nextPlayer === player || nextPlayer === visiblePlayer())) {
+        reveal(nextPlayer);
+        return true;
+      }
+      if (event.target.closest('.ytp-contextmenu, .ytp-settings-menu')) {
+        reveal(visiblePlayer());
+        return true;
+      }
+      return false;
+    };
+    for (const eventName of ['pointermove', 'keydown', 'focusin'])
+      window.addEventListener(eventName, activity, true);
+    window.addEventListener('pointerdown', (event) => {
+      if (activity(event))
+        pointerHeld = event.button === 0;
+    }, true);
+    const release = (event) => {
+      if (event.isTrusted && pointerHeld) {
+        pointerHeld = false;
+        reveal(player);
+      }
+    };
+    window.addEventListener('pointerup', release, true);
+    window.addEventListener('pointercancel', release, true);
+    window.addEventListener('blur', () => { pointerHeld = false; });
+    for (const eventName of ['playing', 'loadedmetadata']) {
+      document.addEventListener(eventName, (event) => {
+        const nextPlayer = event.target instanceof HTMLVideoElement ? event.target.closest('#movie_player') : null;
+        if (nextPlayer && nextPlayer !== player && nextPlayer === visiblePlayer())
+          reveal(nextPlayer);
+      }, true);
+    }
+    const stop = () => {
+      pointerHeld = false;
+      reveal(null);
+    };
+    const sync = () => {
+      const nextPlayer = visiblePlayer();
+      if (nextPlayer !== player)
+        reveal(nextPlayer);
+    };
+    document.addEventListener('yt-navigate-start', stop, true);
+    document.addEventListener('yt-navigate-finish', sync, true);
+    window.addEventListener('pagehide', stop);
+    window.addEventListener('pageshow', sync);
+    if (document.readyState === 'loading')
+      document.addEventListener('DOMContentLoaded', sync, { once: true });
+    else
+      sync();
+  }
+  startPlayerControlsAutoHide();
+
   // CUSTOM[PLAYBACK] 영상 면과 Space의 실제 입력은 기본 video API로 한 번만 처리한다.
   // CUSTOM[PLAYBACK] 설정·입력창·버튼은 네이티브 동작을 유지하고 Framegen 캔버스도 영상 면으로 취급한다.
   function startPlaybackControls() {
     let handledSpace = false;
+    let feedback = null;
+    let feedbackAnimation = null;
+    GM_addStyle(`
+      .youtub-playback-feedback {
+        position: absolute !important; left: 50%; top: 50%; z-index: 60;
+        display: grid; place-items: center; border-radius: 50%;
+        background: rgba(0, 0, 0, .5); color: white; opacity: 0;
+        transform: translate(-50%, -50%); pointer-events: none !important;
+      }
+      .youtub-playback-feedback svg { width: 60%; height: 60%; pointer-events: none !important; }
+    `);
+    const clearFeedback = () => {
+      feedbackAnimation?.cancel();
+      feedbackAnimation = null;
+      feedback?.remove();
+      feedback = null;
+    };
+    // CUSTOM[PLAYBACK-FEEDBACK] 네이티브 클릭을 우회한 조작에도 반투명 재생·정지 표시를 제공한다.
+    const showFeedback = (player, video) => {
+      if (player !== currentWatchPlayer() || !player.contains(video))
+        return;
+      if (feedback?.parentElement !== player) {
+        clearFeedback();
+        feedback = document.createElement('div');
+        feedback.className = 'youtub-playback-feedback';
+        feedback.setAttribute('aria-hidden', 'true');
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('fill', 'currentColor');
+        svg.append(path);
+        feedback.append(svg);
+        player.append(feedback);
+      }
+      const bounds = player.getBoundingClientRect();
+      const size = Math.min(bounds.width, bounds.height) / 4;
+      feedback.style.width = feedback.style.height = `${size}px`;
+      feedback.dataset.state = video.paused ? 'pause' : 'play';
+      feedback.querySelector('path').setAttribute('d', video.paused
+        ? 'M6 5h4v14H6zM14 5h4v14h-4z' : 'M8 5v14l11-7z');
+      feedbackAnimation?.cancel();
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      feedbackAnimation = feedback.animate([
+        { opacity: .7, transform: `translate(-50%, -50%) scale(${reduced ? 1 : .85})` },
+        { opacity: .7, transform: 'translate(-50%, -50%) scale(1)', offset: .25 },
+        { opacity: 0, transform: `translate(-50%, -50%) scale(${reduced ? 1 : 1.15})` }
+      ], { duration: 600, easing: 'ease-out' });
+    };
+    const changePlayback = async (player, video) => {
+      try {
+        if (video.paused)
+          await video.play();
+        else
+          video.pause();
+        showFeedback(player, video);
+      } catch (error) {
+        console.warn(error);
+      }
+    };
     const interactive = 'input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="button"], [role="slider"], [role^="menuitem"], [role="dialog"], dialog, .dialog-gcc-mask, .fc-controls-root, .ytp-chrome-bottom, .ytp-settings-menu';
     const hasInteractiveTarget = (event) => event.composedPath().some(node => node instanceof Element && node.matches(interactive));
-    const currentPlayer = () => {
-      const videoId = currentWatchVideoId();
-      return videoId ? findVisibleWatchPage(videoId)?.querySelector('#movie_player') : null;
-    };
     const toggle = (event, player) => {
       const video = player?.querySelector('video.html5-main-video, video');
       if (!video || video.readyState < 2 || video.controls)
         return false;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (video.paused)
-        video.play().catch(console.warn);
-      else
-        video.pause();
+      void changePlayback(player, video);
       return true;
     };
     window.addEventListener('keydown', (event) => {
@@ -5046,7 +5202,7 @@
         }
         return;
       }
-      handledSpace = toggle(event, currentPlayer());
+      handledSpace = toggle(event, currentWatchPlayer());
     }, true);
     window.addEventListener('keyup', (event) => {
       if (event.isTrusted && event.key === ' ' && handledSpace) {
@@ -5061,19 +5217,21 @@
       const target = event.target;
       if (!(target instanceof Element) || hasInteractiveTarget(event) || !target.matches('video, canvas, .html5-video-container, #movie_player'))
         return;
-      const player = currentPlayer();
+      const player = currentWatchPlayer();
       if (!player?.contains(target))
         return;
       // CUSTOM[PLAYBACK-MENU] 우클릭 메뉴는 body 아래에도 생긴다. 열린 메뉴를 닫는 클릭은 YouTube에 맡긴다.
-      for (const menu of document.querySelectorAll('.ytp-contextmenu, .ytp-settings-menu')) {
-        if (menu.getClientRects().length && getComputedStyle(menu).visibility === 'visible')
-          return;
-      }
+      if (hasOpenPlayerMenu())
+        return;
       if (toggle(event, player))
         player.focus({ preventScroll: true });
     }, true);
     window.addEventListener('blur', () => { handledSpace = false; });
-    document.addEventListener('yt-navigate-start', () => { handledSpace = false; });
+    document.addEventListener('yt-navigate-start', () => {
+      handledSpace = false;
+      clearFeedback();
+    }, true);
+    window.addEventListener('pagehide', clearFeedback);
   }
   startPlaybackControls();
 

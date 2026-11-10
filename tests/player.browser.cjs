@@ -9,14 +9,16 @@ before(async () => { browser = await chromium.launch(); });
 after(async () => { await browser?.close(); });
 
 const player = `<ytd-watch-flexy video-id="fixture"><div id="player-container-outer"><div class="html5-video-player" id="movie_player" tabindex="0">
-  <video muted></video><div class="ytp-right-controls"></div>
+  <video muted></video><div class="ytp-chrome-bottom"><div class="ytp-right-controls"></div></div>
 </div></div></ytd-watch-flexy>`;
-const style = '<style>#movie_player{position:relative;width:800px;height:400px}.ytp-right-controls{position:absolute;bottom:0;right:40px;height:40px;display:flex}</style>';
+const style = '<style>#movie_player{position:relative;width:800px;height:400px}.ytp-chrome-bottom{position:absolute;bottom:0;left:0;width:100%;height:40px}.ytp-right-controls{position:absolute;bottom:0;right:40px;height:40px;display:flex}</style>';
 const toolbox = '#toolBox_extension_codehemu_x';
 const speed = '.SpeedControl_Extension_Btn_X';
 
-async function fixture(t, { home = false, speedEnabled = true } = {}) {
+async function fixture(t, { home = false, speedEnabled = true, clock = false } = {}) {
   const page = await browser.newPage({ acceptDownloads: true });
+  if (clock)
+    await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, []));
@@ -50,6 +52,8 @@ async function fixture(t, { home = false, speedEnabled = true } = {}) {
   }, speedEnabled);
   await page.addInitScript({ path: userscript });
   await page.goto('https://www.youtube.com/' + (home ? '' : 'watch?v=fixture'));
+  if (clock)
+    await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
   return page;
 }
 
@@ -109,6 +113,107 @@ async function playTestVideo(page) {
     await video.play();
   });
 }
+
+test('controls hide after one idle second under the pointer and remain available to keyboard focus', async t => {
+  const page = await fixture(t, { clock: true });
+  await playTestVideo(page);
+  const controls = page.locator('.ytp-chrome-bottom');
+  await page.evaluate(() => {
+    const player = document.querySelector('#movie_player');
+    window.originalPlayerParent = player.parentElement;
+    document.body.append(player);
+    document.querySelector('ytd-watch-flexy').setAttribute('video-id', '');
+  });
+  await page.mouse.move(100, 50);
+  await page.clock.runFor(500);
+  await page.evaluate(() => {
+    originalPlayerParent.append(document.querySelector('#movie_player'));
+    document.querySelector('#movie_player').focus();
+    document.querySelector('ytd-watch-flexy').setAttribute('video-id', 'fixture');
+    document.querySelector('ytd-watch-flexy').dispatchEvent(new Event('yt-navigate-finish'));
+  });
+  await page.clock.runFor(499);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
+  await page.clock.runFor(1);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '0');
+  await page.mouse.move(101, 50);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
+  await page.evaluate(() => {
+    const button = document.createElement('button');
+    button.id = 'native-control';
+    button.textContent = 'Playback';
+    document.querySelector('.ytp-right-controls').prepend(button);
+    document.querySelector('#movie_player').focus();
+  });
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'native-control');
+  await page.clock.runFor(1200);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
+  await page.evaluate(() => document.dispatchEvent(new Event('yt-navigate-start')));
+  await page.clock.runFor(2000);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
+});
+
+test('controls remain visible for open menus and held pointer gestures', async t => {
+  const page = await fixture(t, { clock: true });
+  await playTestVideo(page);
+  const controls = page.locator('.ytp-chrome-bottom');
+  await page.evaluate(() => {
+    const menu = document.createElement('div');
+    menu.className = 'ytp-contextmenu';
+    menu.textContent = 'Menu';
+    document.body.append(menu);
+  });
+  await page.mouse.move(100, 50);
+  await page.clock.runFor(1500);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
+  await page.locator('.ytp-contextmenu').evaluate(menu => menu.style.display = 'none');
+  await page.mouse.move(101, 50);
+  await page.mouse.down();
+  await page.clock.runFor(1500);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
+  await page.mouse.up();
+  await page.clock.runFor(1000);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '0');
+});
+
+test('playback feedback shows the new state at quarter size, fades and honors reduced motion', async t => {
+  const page = await fixture(t, { clock: true });
+  await playTestVideo(page);
+  await page.locator('video').click();
+  const feedback = page.locator('.youtub-playback-feedback');
+  assert.equal(await feedback.getAttribute('data-state'), 'pause');
+  const pausePath = await feedback.locator('path').getAttribute('d');
+  await feedback.evaluate(el => { el.getAnimations()[0].currentTime = 150; });
+  const geometry = await feedback.evaluate(el => {
+    const f = el.getBoundingClientRect();
+    const p = el.parentElement.getBoundingClientRect();
+    return { opacity: +getComputedStyle(el).opacity, width: f.width, shortSide: Math.min(p.width, p.height),
+      offsetX: f.x + f.width / 2 - p.x - p.width / 2, offsetY: f.y + f.height / 2 - p.y - p.height / 2,
+      pointerEvents: getComputedStyle(el).pointerEvents };
+  });
+  assert.ok(geometry.opacity > 0 && geometry.opacity < 1);
+  assert.ok(geometry.width / geometry.shortSide > .2 && geometry.width / geometry.shortSide < .3);
+  assert.ok(Math.abs(geometry.offsetX) < 1 && Math.abs(geometry.offsetY) < 1);
+  assert.equal(geometry.pointerEvents, 'none');
+  await feedback.evaluate(async el => {
+    const animations = el.getAnimations();
+    animations.forEach(animation => animation.finish());
+    await Promise.all(animations.map(animation => animation.finished));
+  });
+  assert.equal(await feedback.evaluate(el => +getComputedStyle(el).opacity), 0);
+  await page.keyboard.press('Space');
+  await page.waitForFunction(() => document.querySelector('.youtub-playback-feedback')?.dataset.state === 'play');
+  assert.notEqual(await feedback.locator('path').getAttribute('d'), pausePath);
+  assert.equal(await feedback.count(), 1);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.locator('video').click();
+  await feedback.evaluate(el => { el.getAnimations()[0].currentTime = 150; });
+  assert.equal(await feedback.getAttribute('data-state'), 'pause');
+  assert.equal(await feedback.evaluate(el => new DOMMatrix(getComputedStyle(el).transform).a), 1);
+  await page.evaluate(() => document.querySelector('ytd-watch-flexy').dispatchEvent(new Event('yt-navigate-start')));
+  assert.equal(await feedback.count(), 0);
+});
 
 test('video clicks and Space pause and resume even when native handlers do nothing', async t => {
   const page = await fixture(t);
