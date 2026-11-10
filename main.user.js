@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.14
+// @version     1.1.5.15
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -5062,7 +5062,14 @@
       if (!(target instanceof Element) || hasInteractiveTarget(event) || !target.matches('video, canvas, .html5-video-container, #movie_player'))
         return;
       const player = currentPlayer();
-      if (player?.contains(target) && toggle(event, player))
+      if (!player?.contains(target))
+        return;
+      // CUSTOM[PLAYBACK-MENU] 우클릭 메뉴는 body 아래에도 생긴다. 열린 메뉴를 닫는 클릭은 YouTube에 맡긴다.
+      for (const menu of document.querySelectorAll('.ytp-contextmenu, .ytp-settings-menu')) {
+        if (menu.getClientRects().length && getComputedStyle(menu).visibility === 'visible')
+          return;
+      }
+      if (toggle(event, player))
         player.focus({ preventScroll: true });
     }, true);
     window.addEventListener('blur', () => { handledSpace = false; });

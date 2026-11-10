@@ -162,6 +162,48 @@ test('playback input toggles once with native handlers and a Framegen canvas', a
   assert.equal(await page.evaluate(() => nativeDoubleClicks), 1);
 });
 
+for (const menuClass of ['ytp-contextmenu', 'ytp-settings-menu']) {
+  test(`video click dismisses an open ${menuClass} without toggling playback`, async t => {
+    const page = await fixture(t);
+    await playTestVideo(page);
+    await page.evaluate(className => {
+      const menu = document.createElement('div');
+      menu.className = `ytp-popup ${className}`;
+      // YouTube's context menu lives under body and can still have aria-hidden=true while opening.
+      menu.setAttribute('aria-hidden', 'true');
+      menu.style.cssText = 'display:none;position:absolute;left:500px;top:10px;width:150px;height:80px';
+      menu.textContent = 'Native menu';
+      document.body.append(menu);
+      const player = document.querySelector('#movie_player');
+      player.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        menu.style.display = 'block';
+      });
+      window.nativeDismissals = 0;
+      document.addEventListener('click', () => {
+        if (menu.style.display !== 'none') {
+          nativeDismissals++;
+          menu.style.display = 'none';
+        }
+      });
+    }, menuClass);
+    const video = page.locator('video');
+    const menu = page.locator(`.${menuClass}`);
+    for (const paused of [false, true]) {
+      assert.equal(await video.evaluate(v => v.paused), paused);
+      await video.click({ button: 'right' });
+      assert.equal(await menu.isVisible(), true);
+      await video.click();
+      assert.equal(await menu.isVisible(), false);
+      assert.equal(await video.evaluate(v => v.paused), paused);
+      // A closed menu must not suppress the next ordinary playback click.
+      await video.click();
+      assert.equal(await video.evaluate(v => v.paused), !paused);
+    }
+    assert.equal(await page.evaluate(() => nativeDismissals), 2);
+  });
+}
+
 test('playback shortcuts preserve typing, native buttons and synthetic clicks', async t => {
   const page = await fixture(t);
   await playTestVideo(page);
