@@ -3,18 +3,26 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { test } = require('node:test');
 const { chromium } = require('playwright');
+const userscript = process.env.LAYOUT_USERSCRIPT || path.join(__dirname, '..', 'main.user.js');
+
+async function layoutPage(browser, body = '<body></body>') {
+  const page = await browser.newPage();
+  await page.route('**/*', route => route.fulfill({ contentType: 'text/html', body }));
+  await page.goto('https://www.youtube.com/feed/subscriptions');
+  await page.evaluate(() => {
+    window.GM_getValue = (key, defaultValue) => defaultValue;
+    window.GM_addStyle = window.GM_registerMenuCommand = () => {};
+    window.GM_addElement = (parent, name, properties) =>
+      parent.appendChild(Object.assign(document.createElement(name), properties));
+  });
+  return page;
+}
 
 test('layout ignores unrelated root attributes and releases hidden chat observers', async () => {
   const browser = await chromium.launch();
   try {
-    const page = await browser.newPage();
-    await page.route('**/*', route => route.fulfill({ contentType: 'text/html', body: '<body></body>' }));
-    await page.goto('https://www.youtube.com/feed/subscriptions');
+    const page = await layoutPage(browser);
     await page.evaluate(() => {
-      window.GM_getValue = (key, defaultValue) => defaultValue;
-      window.GM_addStyle = window.GM_registerMenuCommand = () => {};
-      window.GM_addElement = (parent, name, properties) =>
-        parent.appendChild(Object.assign(document.createElement(name), properties));
       window.rootNoiseCallbacks = 0;
       window.chatObservers = 0;
       window.MutationObserver = class extends MutationObserver {
@@ -49,7 +57,7 @@ test('layout ignores unrelated root attributes and releases hidden chat observer
         urlChanged() { this.urlChanges = (this.urlChanges || 0) + 1; }
       });
     });
-    await page.addScriptTag({ path: process.env.LAYOUT_USERSCRIPT || path.join(__dirname, '..', 'main.user.js') });
+    await page.addScriptTag({ path: userscript });
     await page.waitForFunction(() => typeof customElements.get('ytd-live-chat-frame').prototype.urlChangedAsync12 === 'function');
     const state = await page.evaluate(async () => {
       for (let index = 0; index < 20; index++) {
@@ -85,4 +93,88 @@ test('layout ignores unrelated root attributes and releases hidden chat observer
   } finally {
     await browser.close();
   }
+});
+
+test('layout detects an existing or delayed player without polling feed mutations', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  for (const alreadyReady of [false, true]) {
+    const page = await layoutPage(browser);
+    await page.evaluate(ready => {
+      window.playerAPI = ready ? {} : null;
+      window.playerReads = 0;
+      Object.defineProperty(window, '_yt_player', { get() { window.playerReads++; return window.playerAPI; } });
+    }, alreadyReady);
+    await page.addScriptTag({ path: userscript });
+    const state = await page.evaluate(async () => {
+      const ready = () => document.documentElement.getAttribute('tabview-loaded').includes('p');
+      const initial = ready();
+      const before = window.playerReads;
+      for (let i = 0; i < 20; i++) {
+        document.body.append(document.createElement('article'));
+        await Promise.resolve();
+      }
+      const feedReads = window.playerReads - before;
+      window.playerAPI = {};
+      document.dispatchEvent(new Event('yt-player-updated'));
+      const afterReady = ready();
+      const settled = window.playerReads;
+      document.dispatchEvent(new Event('yt-player-updated'));
+      return { initial, feedReads, afterReady, laterReads: window.playerReads - settled };
+    });
+    t.diagnostic(JSON.stringify(state));
+    assert.deepEqual(state, { initial: alreadyReady, feedReads: 0, afterReady: true, laterReads: 0 });
+    await page.close();
+  }
+});
+
+test('removing old comments and live chat keeps the replacement panels responsive', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await layoutPage(browser, '<ytd-watch-flexy><div id="player"></div>'
+    + '<div id="columns" class="style-scope ytd-watch-flexy"></div></ytd-watch-flexy>'
+    + '<a tyt-tab-content="#tab-comments"></a>');
+  await page.evaluate(() => {
+    class Panel extends HTMLElement {
+      get hostElement() { return this; }
+      attached() {}
+      detached() {}
+      _createPropertyObserver() {}
+    }
+    customElements.define('ytd-comments', class extends Panel {});
+    customElements.define('ytd-live-chat-frame', class extends Panel {});
+  });
+  await page.addScriptTag({ path: userscript });
+  await page.waitForFunction(() => customElements.get('ytd-comments').prototype.attached498
+    && customElements.get('ytd-live-chat-frame').prototype.attached498);
+  await page.evaluate(() => {
+    document.dispatchEvent(new Event('yt-navigate-finish'));
+    window.addPanels = () => {
+      const column = document.querySelector('#columns');
+      const comments = document.createElement('ytd-comments');
+      const chat = document.createElement('ytd-live-chat-frame');
+      comments.id = 'comments';
+      chat.id = 'chat';
+      comments.className = chat.className = 'style-scope';
+      column.prepend(comments, chat);
+      comments.attached();
+      chat.attached();
+      return { comments, chat };
+    };
+    window.oldPanels = window.addPanels();
+  });
+  await page.waitForFunction(() => oldPanels.chat.hasAttribute('tyt-active-chat-frame') && oldPanels.comments.hasAttribute('tyt-comments-area'));
+  await page.evaluate(() => { window.newPanels = window.addPanels(); });
+  await page.waitForFunction(() => newPanels.chat.hasAttribute('tyt-active-chat-frame') && newPanels.comments.hasAttribute('tyt-comments-area'));
+  const state = await page.evaluate(async () => {
+    for (const old of Object.values(oldPanels)) { old.remove(); old.detached(); }
+    await Promise.resolve();
+    newPanels.chat.setAttribute('collapsed', '');
+    newPanels.comments.setAttribute('tyt-comments-data-status', '2');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const flexy = document.querySelector('ytd-watch-flexy');
+    return { chat: flexy.getAttribute('tyt-chat'), commentsDisabled: flexy.hasAttribute('tyt-comment-disabled'),
+      tabHidden: document.querySelector('[tyt-tab-content]').classList.contains('tab-btn-hidden') };
+  });
+  assert.deepEqual(state, { chat: '-', commentsDisabled: true, tabHidden: false });
 });

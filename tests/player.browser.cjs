@@ -103,6 +103,66 @@ test('theme switch preserves other YouTube PREF settings and flags', async t => 
   assert.equal((await page.context().cookies()).find(c => c.name === 'PREF').value, 'hl=ko&f6=8002a&extra=a=b');
 });
 
+test('saved speed and loop follow the active watch player and leave home previews alone', async t => {
+  const page = await fixture(t, { home: true });
+  await page.evaluate(() => {
+    localStorage.setItem('yt/videoPlaySpeed', '1.5');
+    localStorage.setItem('py/videoLoop', 'true');
+  });
+  await page.reload();
+  const states = await page.evaluate(html => {
+    document.body.insertAdjacentHTML('beforeend', html);
+    const preview = document.querySelector('ytd-watch-flexy');
+    const notifyVideo = root => root.querySelector('video').dispatchEvent(new Event('loadedmetadata'));
+    const snapshot = root => {
+      const video = root.querySelector('video');
+      return [video.playbackRate, video.loop, !!root.querySelector('.SpeedControl_Extension_Btn_X')];
+    };
+    notifyVideo(preview);
+    document.dispatchEvent(new Event('yt-player-updated'));
+    const home = snapshot(preview);
+    document.dispatchEvent(new Event('yt-navigate-start'));
+    history.pushState({}, '', '/watch?v=next');
+    document.body.insertAdjacentHTML('beforeend', html);
+    const active = document.body.lastElementChild;
+    active.setAttribute('video-id', 'next');
+    document.dispatchEvent(new Event('yt-navigate-finish'));
+    notifyVideo(preview);
+    const previous = snapshot(preview);
+    preview.hidden = true;
+    notifyVideo(active);
+    return { home, previous, active: snapshot(active) };
+  }, player);
+  assert.deepEqual(states, { home: [1, false, false], previous: [1, false, false], active: [1.5, true, true] });
+});
+
+test('tools mount when a cached watch player becomes current and still work on live and clip pages', async t => {
+  const page = await fixture(t, { home: true });
+  await page.evaluate(html => {
+    document.body.insertAdjacentHTML('beforeend', html);
+    document.querySelector('ytd-watch-flexy').hidden = true;
+    document.dispatchEvent(new Event('yt-navigate-start'));
+    history.pushState({}, '', '/watch?v=next');
+    document.dispatchEvent(new Event('yt-navigate-finish'));
+  }, player);
+  assert.equal(await page.locator(toolbox).count(), 0);
+  await page.locator('ytd-watch-flexy').evaluate(el => { el.hidden = false; });
+  assert.equal(await page.locator(toolbox).count(), 0);
+  await page.locator('ytd-watch-flexy').evaluate(el => el.setAttribute('video-id', 'next'));
+  await page.locator(toolbox).waitFor();
+  for (const route of ['/live/fixture', '/clip/fixture']) {
+    await page.evaluate(({ route, html }) => {
+      document.dispatchEvent(new Event('yt-navigate-start'));
+      history.pushState({}, '', route);
+      document.querySelector('ytd-watch-flexy').remove();
+      document.body.insertAdjacentHTML('beforeend', html);
+      document.dispatchEvent(new Event('yt-navigate-finish'));
+    }, { route, html: player });
+    assert.equal(await page.locator(toolbox).count(), 1);
+    assert.equal(await page.locator(speed).count(), 1);
+  }
+});
+
 async function playTestVideo(page) {
   await page.evaluate(async () => {
     const canvas = document.createElement('canvas');
@@ -173,6 +233,52 @@ test('controls remain visible for open menus and held pointer gestures', async t
   await page.clock.runFor(1500);
   assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
   await page.mouse.up();
+  await page.clock.runFor(1000);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '0');
+});
+
+test('pointer movement shares one idle timer and hides one second after the last move', async t => {
+  const page = await fixture(t, { clock: true });
+  await page.clock.runFor(1001);
+  const controls = page.locator('.ytp-chrome-bottom');
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '0');
+  await page.evaluate(() => {
+    const schedule = window.setTimeout;
+    window.idleTimers = 0;
+    window.setTimeout = (fn, delay, ...args) => {
+      if (delay === 1000) window.idleTimers++;
+      return schedule(fn, delay, ...args);
+    };
+  });
+  await page.mouse.move(100, 50);
+  await page.clock.runFor(600);
+  await page.mouse.move(150, 60, { steps: 24 });
+  const timers = await page.evaluate(() => window.idleTimers);
+  t.diagnostic(`idle timers scheduled for 25 pointer moves: ${timers}`);
+  assert.equal(timers, 1);
+  await page.clock.runFor(999);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
+  await page.clock.runFor(1);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '0');
+});
+
+test('controls hide again after clicking away from a keyboard-focused control', async t => {
+  const page = await fixture(t, { clock: true });
+  await page.evaluate(() => {
+    const inside = document.createElement('button');
+    inside.id = 'last-control';
+    document.querySelector('.ytp-right-controls').append(inside);
+    const outside = document.createElement('button');
+    outside.id = 'next-control';
+    document.body.append(outside);
+  });
+  await page.keyboard.press('Tab');
+  await page.locator('#last-control').focus();
+  const controls = page.locator('.ytp-chrome-bottom');
+  await page.clock.runFor(1100);
+  assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '1');
+  await page.locator('#next-control').click();
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'next-control');
   await page.clock.runFor(1000);
   assert.equal(await controls.evaluate(el => getComputedStyle(el).opacity), '0');
 });

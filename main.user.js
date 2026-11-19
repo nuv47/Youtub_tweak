@@ -5,7 +5,7 @@
 // @description       A userscript that enhances YouTube with multiple useful features: optimized video details layout, screenshot capture, dark/light theme toggle, fast-forward controls, and more.
 // @description:ko    YouTube를 다양한 유용한 기능으로 개선하는 사용자 스크립트로, 최적화된 비디오 상세 페이지 레이아웃, 스크린샷 캡처, 다크/라이트 테마 전환, 빠른 앞으로 감기 제어 등을 제공합니다.
 // @namespace   youtub_adguard_local
-// @version     1.1.5.16
+// @version     1.1.5.17
 // @updateURL   https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @downloadURL https://raw.githubusercontent.com/nuv47/Youtub_tweak/main/main.user.js
 // @author      Thalrien.vx,CY Fung
@@ -2471,6 +2471,9 @@
             return;
           if (!hostElement || hostElement.id !== "comments")
             return;
+          // CUSTOM[COMMENTS] 교체 전 노드의 지연된 분리 이벤트가 새 댓글 감시를 끊지 않게 한다.
+          if (elements.comments !== hostElement)
+            aoComment.disconnect();
           elements.comments = hostElement;
           Promise.resolve(hostElement).then(eventMap["settingCommentsVideoId"]).catch(console.warn);
           aoComment.observe(hostElement, { attributeFilter: ["hidden", "tyt-comments-video-id", "tyt-comments-data-status"] });
@@ -2502,10 +2505,11 @@
             return;
           if (hostElement.hasAttribute000("tyt-comments-area")) {
             hostElement.removeAttribute000("tyt-comments-area");
+            if (elements.comments !== hostElement)
+              return;
             aoComment.disconnect();
-            aoComment.takeRecords();
             elements.comments = null;
-            document.querySelector('[tyt-tab-content="#tab-comments"]').classList.add("tab-btn-hidden");
+            document.querySelector('[tyt-tab-content="#tab-comments"]')?.classList.add("tab-btn-hidden");
             Promise.resolve(lockSet["removeKeepCommentsScrollerLock"]).then(removeKeepCommentsScroller).catch(console.warn);
           }
         },
@@ -2888,7 +2892,9 @@
           const chatElem = await getGeneralChatElement();
           if (lockGet["ytdLiveAttachedLock"] !== lockId)
             return;
-          if (chatElem === hostElement) {
+          if (chatElem === hostElement && hostElement.isConnected) {
+            if (elements.chat !== chatElem)
+              aoChat.disconnect();
             elements.chat = chatElem;
             aoChat.observe(chatElem, { attributeFilter: ["collapsed", "tyt-active-chat-frame"] });
             const isFlexyReady = elements.flexy instanceof Element;
@@ -2924,9 +2930,10 @@
           if (hostElement.isConnected !== false)
             return;
           if (hostElement.hasAttribute000("tyt-active-chat-frame")) {
-            aoChat.disconnect();
-            aoChat.takeRecords();
             hostElement.removeAttribute000("tyt-active-chat-frame");
+            if (elements.chat !== hostElement)
+              return;
+            aoChat.disconnect();
             elements.chat = null;
             const ytdFlexyElm = elements.flexy;
             if (ytdFlexyElm) {
@@ -3081,10 +3088,6 @@
             return;
           if (hostElement.isConnected !== false)
             return;
-        },
-        "_yt_playerProvided": () => {
-          mLoaded.flag |= 4;
-          document.documentElement.setAttribute111("tabview-loaded", mLoaded.makeString());
         },
         "relatedElementProvided": (target) => {
           if (target.closest("[hidden]"))
@@ -3570,26 +3573,21 @@
         } catch (e) {
         }
       };
-      const moOverallRes = {
-        _yt_playerProvided: () => (window || 0)._yt_player || 0 || 0
+      // CUSTOM[PERFORMANCE] 피드 변경마다 확인하지 않고 스크립트 로드·플레이어 준비 시점에만 확인한다.
+      const playerReadyEvents = new AbortController();
+      const markPlayerReady = () => {
+        if (!window._yt_player) return;
+        playerReadyEvents.abort();
+        mLoaded.flag |= 4;
+        document.documentElement.setAttribute111("tabview-loaded", mLoaded.makeString());
       };
-      let promiseWaitNext = null;
-      const moOverall = new MutationObserver(() => {
-        if (promiseWaitNext) {
-          promiseWaitNext.resolve();
-          promiseWaitNext = null;
-        }
-        if (typeof moOverallRes._yt_playerProvided === "function") {
-          const r = moOverallRes._yt_playerProvided();
-          if (r) {
-            moOverallRes._yt_playerProvided = r;
-            eventMap._yt_playerProvided();
-            // CUSTOM[PERFORMANCE] 플레이어 탐지를 마친 전체 DOM 감시는 해제한다.
-            moOverall.disconnect();
-          }
-        }
-      });
-      moOverall.observe(document, { subtree: true, childList: true });
+      const untilPlayerReady = { capture: true, signal: playerReadyEvents.signal };
+      for (const name of ["yt-player-updated", "yt-navigate-finish", "loadedmetadata"])
+        document.addEventListener(name, markPlayerReady, untilPlayerReady);
+      document.addEventListener("load", event => {
+        if (event.target instanceof HTMLScriptElement) markPlayerReady();
+      }, untilPlayerReady);
+      markPlayerReady();
       const moEgmPanelReady = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
           const target = mutation.target;
@@ -4713,7 +4711,8 @@
   function startPlayerTools(speedEnabled) {
     ToolBox.start();
     if (speedEnabled) SpeedControl.start();
-    const selector = "#player-container-outer .html5-video-player .ytp-right-controls";
+    const playerSelector = "#player-container-outer .html5-video-player";
+    const onPlayerPage = () => /^\/(?:watch|live|clip)(?:\/|$)/.test(location.pathname);
     let observer = null;
     let timeout;
     const stop = () => {
@@ -4721,24 +4720,40 @@
       observer = null;
       clearTimeout(timeout);
     };
-    const mount = () => {
-      const controls = document.querySelector(selector);
-      if (!controls) return false;
-      stop();
-      const player = controls.closest(".html5-video-player");
-      ToolBox.mount(player, controls);
-      if (speedEnabled) SpeedControl.mount(player, controls);
-      return true;
+    const mount = root => {
+      const candidates = root.matches?.(".ytp-right-controls") ? [root] : root.querySelectorAll(".ytp-right-controls");
+      for (const controls of candidates) {
+        const player = controls.closest(playerSelector);
+        if (!isPagePlayer(player)) continue;
+        stop();
+        ToolBox.mount(player, controls);
+        if (speedEnabled) SpeedControl.mount(player, controls);
+        return true;
+      }
+      return false;
     };
     const sync = () => {
-      if (mount() || observer || !/^\/(?:watch|live|clip)(?:\/|$)/.test(location.pathname)) return;
-      observer = new MutationObserver(mount);
-      observer.observe(document, { childList: true, subtree: true });
+      if (!onPlayerPage()) { stop(); return; }
+      if (mount(document) || observer) return;
+      // CUSTOM[PLAYER-TOOLS] 준비 중에 추가되거나 표시된 부분만 검사한다. 이전 영상의 도구에는 연결하지 않는다.
+      observer = new MutationObserver(records => {
+        if (!onPlayerPage()) { stop(); return; }
+        for (const record of records) {
+          if (record.type === "attributes") {
+            if (!record.target.hidden && mount(record.target)) return;
+          } else {
+            for (const node of record.addedNodes)
+              if (node.nodeType === Node.ELEMENT_NODE && mount(node)) return;
+          }
+        }
+      });
+      observer.observe(document, { childList: true, subtree: true, attributeFilter: ["hidden", "video-id"] });
       timeout = setTimeout(stop, 10000);
     };
     document.addEventListener("loadedmetadata", event => {
       const video = event.target;
-      if (!(video instanceof HTMLVideoElement) || !video.closest("#movie_player")) return;
+      if (!onPlayerPage() || !(video instanceof HTMLVideoElement) ||
+          !isPagePlayer(video.closest("#movie_player"))) return;
       sync();
       video.loop = ToolBox.loopEnabled;
       if (speedEnabled) SpeedControl.setVideoRate(SpeedControl.currentSpeed, video);
@@ -4861,6 +4876,12 @@
 
   function currentWatchVideoId() {
     return location.pathname === "/watch" ? new URLSearchParams(location.search).get("v") || "" : "";
+  }
+
+  function isPagePlayer(player, videoId = currentWatchVideoId()) {
+    if (!player || player.closest("[hidden], ytd-miniplayer, ytd-video-preview, ytd-inline-preview-player-renderer")) return false;
+    const ownerId = player.closest("ytd-watch-flexy")?.getAttribute("video-id");
+    return !videoId || !ownerId || ownerId === videoId;
   }
 
   function findVisibleWatchPage(videoId) {
@@ -5028,11 +5049,17 @@
     const attribute = 'data-youtub-controls-hidden';
     let player = null;
     let timer = null;
+    let hideAt = 0;
     let pointerHeld = false;
     // 초기 임시 컨테이너에서 watch 화면으로 옮겨지기 전에도 표시 중인 컨트롤을 숨긴다.
-    const visiblePlayer = () => currentWatchVideoId()
-      ? Array.from(document.querySelectorAll('#movie_player')).find(p => !p.closest('[hidden]') && p.getClientRects().length) || null
-      : null;
+    const visiblePlayer = () => {
+      const videoId = currentWatchVideoId();
+      if (!videoId) return null;
+      for (const candidate of document.querySelectorAll('#movie_player')) {
+        if (isPagePlayer(candidate, videoId) && candidate.getClientRects().length) return candidate;
+      }
+      return null;
+    };
     GM_addStyle(`
       #movie_player[${attribute}] .ytp-chrome-top,
       #movie_player[${attribute}] .ytp-chrome-bottom,
@@ -5041,28 +5068,37 @@
         opacity: 0 !important; pointer-events: none !important; transition: none !important;
       }
     `);
-    const reveal = (nextPlayer) => {
-      clearTimeout(timer);
+    // CUSTOM[CONTROLS-IDLE] 포인터 이동마다 타이머를 교체하지 않고 마지막 입력의 만료 시각만 갱신한다.
+    const hideWhenIdle = () => {
       timer = null;
-      if (player !== nextPlayer)
-        player?.removeAttribute(attribute);
-      player = nextPlayer;
-      if (!player?.isConnected)
+      if (!player?.isConnected) return;
+      const remaining = hideAt - performance.now();
+      if (remaining > 0) {
+        timer = setTimeout(hideWhenIdle, Math.ceil(remaining));
         return;
-      player.removeAttribute(attribute);
-      timer = setTimeout(() => {
+      }
+      if (pointerHeld || player !== visiblePlayer() || hasOpenPlayerMenu() ||
+          player.querySelector('.ytp-chrome-top :focus-visible, .ytp-chrome-bottom :focus-visible'))
+        return;
+      player.setAttribute(attribute, '');
+    };
+    const reveal = (nextPlayer) => {
+      if (player !== nextPlayer) {
+        clearTimeout(timer);
         timer = null;
-        if (player !== visiblePlayer() || pointerHeld || hasOpenPlayerMenu() ||
-            player.querySelector('.ytp-chrome-top :focus-visible, .ytp-chrome-bottom :focus-visible'))
-          return;
-        player.setAttribute(attribute, '');
-      }, 1000);
+        player?.removeAttribute(attribute);
+        player = nextPlayer;
+      }
+      if (!player?.isConnected) return;
+      if (player.hasAttribute(attribute)) player.removeAttribute(attribute);
+      hideAt = performance.now() + 1000;
+      if (timer === null) timer = setTimeout(hideWhenIdle, 1000);
     };
     const activity = (event) => {
-      if (!event.isTrusted || !(event.target instanceof Element))
+      if (!event.isTrusted || location.pathname !== '/watch' || !(event.target instanceof Element))
         return false;
       const nextPlayer = event.target.closest('#movie_player');
-      if (event.type === 'focusin' && event.target === nextPlayer)
+      if ((event.type === 'focusin' || event.type === 'focusout') && event.target === nextPlayer)
         return false;
       if (nextPlayer && (nextPlayer === player || nextPlayer === visiblePlayer())) {
         reveal(nextPlayer);
@@ -5074,7 +5110,7 @@
       }
       return false;
     };
-    for (const eventName of ['pointermove', 'keydown', 'focusin'])
+    for (const eventName of ['pointermove', 'keydown', 'focusin', 'focusout'])
       window.addEventListener(eventName, activity, true);
     window.addEventListener('pointerdown', (event) => {
       if (activity(event))
@@ -5088,7 +5124,7 @@
     };
     window.addEventListener('pointerup', release, true);
     window.addEventListener('pointercancel', release, true);
-    window.addEventListener('blur', () => { pointerHeld = false; });
+    window.addEventListener('blur', release);
     for (const eventName of ['playing', 'loadedmetadata']) {
       document.addEventListener(eventName, (event) => {
         const nextPlayer = event.target instanceof HTMLVideoElement ? event.target.closest('#movie_player') : null;
